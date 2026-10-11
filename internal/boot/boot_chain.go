@@ -3,18 +3,32 @@ package boot
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/JimDevil/ext-proc/internal/model/config"
 	"github.com/JimDevil/ext-proc/internal/plugin"
+	"github.com/JimDevil/ext-proc/internal/plugin/dynamic"
 	"github.com/JimDevil/ext-proc/internal/processor"
 )
+
+// defaultRetiredChainTTL bounds retired chains after hot reload (reclaims
+// dynamic subprocess plugin processes).
+const defaultRetiredChainTTL = 30
 
 // InitChain builds the plugin route table (global chain + matchRule variants)
 // and registers the global processor, plus the hot-reload hook: when the gcfg
 // watcher detects a config change the table is rebuilt wholesale and swapped
 // atomically, without restarting the process.
 func InitChain(ctx context.Context) error {
-	proc := processor.New(config.Cfg.App.Name, config.Log)
+	ttl := config.Cfg.Server.RetiredChainTTLSeconds
+	if ttl <= 0 {
+		ttl = defaultRetiredChainTTL
+	}
+	proc := processor.New(config.Cfg.App.Name, time.Duration(ttl)*time.Second, config.Log)
+
+	// Dynamic subprocess plugins (chain.plugins[].url): install the loader
+	// once; BuildRouteTable calls it for every url-carrying plugin instance.
+	dynamic.Install(config.Cfg.Server.PluginCacheDir, config.Log)
 
 	rebuild := func(ctx context.Context) error {
 		table, err := plugin.BuildRouteTable(config.Cfg.Chain, config.Raw, config.Log)

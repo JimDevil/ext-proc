@@ -10,9 +10,11 @@ package plugin
 
 import (
 	"log/slog"
+	"sync/atomic"
 
 	extproc "github.com/JimDevil/ext-proc/sdk"
 	"github.com/gogf/gf/v2/encoding/gjson"
+	"github.com/gogf/gf/v2/errors/gerror"
 )
 
 // ChainConfig is the orchestration config for one chain (defined here, in the
@@ -67,6 +69,20 @@ type PluginConfig struct {
 	// the global config. Each plugin owns its rules independently — one
 	// plugin's rule has no effect on the others.
 	MatchRules []MatchRule `json:"matchRules" yaml:"matchRules"`
+	// URL optionally loads the plugin as a DYNAMIC SUBPROCESS PLUGIN instead
+	// of a compiled-in package:
+	//   oci://registry/repo:tag (or @sha256:digest) — the image is pulled at
+	//     load time into the local plugin cache and its executable is spawned
+	//     as a child process speaking the ext_proc protocol (anonymous public
+	//     registry pulls; digest-pinned refs are recommended for production);
+	//   file:///abs/path — a local plugin binary (development / e2e).
+	// When set, the plugin need not be compiled into this binary and the
+	// factory registry is not consulted. Every instance (global + matchRule
+	// variants) runs its own subprocess with the instance's merged config.
+	URL string `json:"url" yaml:"url"`
+	// Timeout bounds ONE phase round trip to a dynamic plugin's subprocess
+	// ("300ms", "2s", ...; default 5s). Ignored for compiled-in plugins.
+	Timeout string `json:"timeout" yaml:"timeout"`
 }
 
 // Context is the narrow interface plugins use to operate on the current
@@ -117,10 +133,12 @@ type Plugin interface {
 	// Get(...).String() style accessors). Returning an error fails startup
 	// (fail fast).
 	Init(cfg *gjson.Json, logger *slog.Logger) error
-	// Close releases plugin resources on graceful shutdown.
-	// Note: hot reload discards old plugin instances WITHOUT calling Close, so
-	// plugins must not hold resources that need explicit release (put DB
-	// connections in package-level singletons instead).
+	// Close releases plugin resources. It runs on graceful shutdown AND when
+	// a hot-reload-retired chain's TTL expires (reclaiming dynamic subprocess
+	// plugins). Plugins must tolerate Close being called at any point after
+	// the instance left the live chain; still do NOT hold resources that
+	// require explicit release in instances (put connections in package-level
+	// singletons instead) — see README.
 	Close() error
 
 	// The six phase callbacks. header/trailer keys are lower cased (guaranteed
@@ -149,3 +167,28 @@ func (BasePlugin) OnResponseTrailers(Context, extproc.AllHeaders) error { return
 
 // Factory creates a plugin instance.
 type Factory func() Plugin
+
+// DynamicLoader starts one dynamic (subprocess) plugin instance bound to cfg.
+// Implemented by internal/plugin/dynamic and installed process-wide via
+// SetDynamicLoader; the hook indirection keeps this package free of
+// exec/OCI/gRPC concerns.
+type DynamicLoader interface {
+	// Load resolves the plugin binary (pc.URL), spawns it and returns the
+	// adapter that forwards phase calls to it. cfg is the instance's merged
+	// config node (nil when the plugin has no config section); the subprocess
+	// receives it verbatim and runs Init itself.
+	Load(pc PluginConfig, cfg *gjson.Json, logger *slog.Logger) (Plugin, error)
+}
+
+var dynamicLoader atomic.Pointer[DynamicLoader]
+
+// SetDynamicLoader installs the dynamic plugin loader (called once by boot).
+func SetDynamicLoader(l DynamicLoader) { dynamicLoader.Store(&l) }
+
+// loadDynamic resolves a dynamic plugin instance through the installed loader.
+func loadDynamic(pc PluginConfig, cfg *gjson.Json, logger *slog.Logger) (Plugin, error) {
+	if l := dynamicLoader.Load(); l != nil {
+		return (*l).Load(pc, cfg, logger)
+	}
+	return nil, gerror.Newf("plugin %s sets url %q but no dynamic loader is installed", pc.Name, pc.URL)
+}

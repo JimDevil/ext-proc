@@ -11,6 +11,7 @@
 ## 架构约定（改代码前必读）
 
 - **filter chain**：`internal/plugin` 定义插件接入标准（`Plugin` 接口）、注册表与 `Chain`；`internal/processor` 把 SDK 的六阶段回调桥接到 filter chain；`internal/server` 负责进程装配
+- **动态插件（子进程）**：`internal/plugin/dynamic` 把 `chain.plugins[].url` 指向的插件二进制（`oci://` 拉取缓存 / `file://` 本地）拉起为子进程，走标准 ext_proc 协议（每阶段一条短流、宿主回放 mutation）；`internal/pluginhost` 是子进程侧入口（单插件 → ext_proc 服务 + stdout `EXTPROC_PLUGIN_V1` 握手）；热更新退役链在 `server.retiredChainTTLSeconds` 后统一 CloseAll 回收子进程
 - **每个插件一个包**（`internal/plugins/<name>`），插件之间零依赖，只依赖 `internal/plugin` 暴露的接口与 SDK 的纯数据类型
 - **配置驱动**：每个插件在 `manifest/config/config.yaml` 的 `chain.plugins` 下独立分段，`enabled` 单独开关、`order` 决定 filter chain 顺序、`config` 为插件私有配置（由插件自己的 `Init` 解析）
 - **热更新**：gcfg watch 触发后整体重建 filter chain 并原子替换，在途请求继续用旧链直至结束——插件实例视为不可变，**不要在插件实例上做运行时可变状态**（跨请求状态请放注册表并加锁）
@@ -42,6 +43,7 @@
 5. 短路（拒答/重定向）统一走 `ctx.CancelRequest`；后续阶段若依赖 headers 阶段的信息，用 `ctx.SetValue/GetValue` 传递
 6. 插件自身故障**不要静默吞错**：返回 error，由 `chain.failurePolicy`（fail_closed/fail_open）统一决定放行或中断
 7. 新增/修改插件必须带表驱动测试（mock 用法见 `internal/plugin/plugintest` 与现有插件测试）
+8. **动态插件形态**（可选发布方式）：插件实现不变，另建 `cmd/<name>-plugin/main.go`，匿名导入插件包后调用 `pluginhost.MustServe("<name>", logger)`；`Init` 的 config 节点经 `EXTPROC_PLUGIN_CONFIG` 环境变量或 `-config` 文件注入；宿主侧在 `chain.plugins` 配 `url: oci://...|file:///abs/path` 即可免编译加载
 
 ## 测试要求
 

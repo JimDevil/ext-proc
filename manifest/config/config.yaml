@@ -112,3 +112,25 @@ chain:
         # matchRules:
         #   - pathPrefix: /internal/
         #     disable: true
+
+  # Dynamic subprocess plugins: a url turns the entry into a plugin binary
+  # pulled from an OCI registry (or a local file) and run as a child process
+  # speaking the ext_proc protocol — no recompile of this binary needed.
+  # Every instance (global + matchRule variants) owns its subprocess, which
+  # is reclaimed after hot reload via server.retiredChainTTLSeconds.
+  #
+  # - name: echo-plugin
+  #   enabled: true
+  #   order: 30
+  #   failurePolicy: fail_open
+  #   # oci:// pulls an anonymous PUBLIC image (digest-pinned recommended);
+  #   # file:///abs/path runs a local binary (development / e2e).
+  #   url: oci://ghcr.io/jimdevil/extproc-plugin-echo:v0.1.0
+  #   # Per-phase round-trip budget (default 5s)
+  #   timeout: 5s
+  #   config:
+  #     value: "on"
+  #   # Route-scoped overrides work exactly like for compiled-in plugins:
+  #   # matchRules:
+  #   #   - domain: ["*.internal.corp"]
+  #   #     disable: true

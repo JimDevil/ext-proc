@@ -186,6 +186,43 @@ chain:
       config: { yourKey: yourValue }   # plugin-private config, parsed by the plugin itself
 ```
 
+## Dynamic plugins (subprocess)
+
+Plugins can also ship **without recompiling this binary**: give an entry a `url` and it runs as a child process speaking the ext_proc protocol. Every instance (global + matchRule variants) owns its subprocess with the instance's merged config; orchestration (order, matchRules, failurePolicy, hot reload) stays in the host.
+
+- `oci://registry/repo:tag` — anonymous public pull at load time into a digest-addressed cache (`server.pluginCacheDir`); pin `@sha256:...` in production;
+- `file:///abs/path` — a local plugin binary (development / e2e).
+
+```yaml
+chain:
+  plugins:
+    - name: echo-plugin
+      enabled: true
+      order: 30
+      failurePolicy: fail_open
+      url: oci://ghcr.io/jimdevil/extproc-plugin-echo:v0.1.0
+      timeout: 5s                       # per-phase round-trip budget (default 5s)
+      config: { value: "on" }
+      # matchRules work exactly like for compiled-in plugins
+```
+
+Behavior:
+
+- the host sends the FULL current phase state on a short stream; the mutations the subprocess returns are replayed onto the host-side context — header set/remove, body replace, and `ImmediateResponse` short-circuits all map 1:1;
+- a crashed subprocess is revived on the next call (bounded backoff); the entry's failurePolicy covers the requests in between;
+- a config reload swaps the table atomically; replaced subprocesses are reclaimed after `server.retiredChainTTLSeconds` (default 30) once in-flight streams drained.
+
+Writing one: implement `plugin.Plugin` as usual, then wrap it in a tiny main via `internal/pluginhost` — see `cmd/echo-plugin` (minimal example) and `cmd/model-router-plugin`. The wire protocol is ext_proc itself, so the same binary also serves as an independent ext_proc service; only who dials it differs.
+
+```go
+func main() {
+    _ "yourmodule/yourplugin" // plugin.Register in init()
+    pluginhost.MustServe("your-plugin", slog.New(slog.NewTextHandler(os.Stderr, nil)))
+}
+```
+
+Trade-offs vs compiled-in plugins: one extra loopback hop per phase (µs-scale), one Go runtime per instance (~20MB), and dynamic loading means you own supply-chain hygiene (digest pinning; private registries → pre-pull and use `file://`). Cross-plugin `SetValue` state does not cross the wire.
+
 ## Notes
 
 - **Hot reload**: editing `config.yaml` rebuilds the chain automatically (new requests use the new chain, in-flight requests the old one). Plugin instances are immutable — never keep cross-request mutable state on an instance.

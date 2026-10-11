@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	extproc "github.com/JimDevil/ext-proc/sdk"
 
@@ -29,6 +30,7 @@ func Global() *ChainProcessor { return global.Load() }
 // until they finish.
 type ChainProcessor struct {
 	name      string
+	retireTTL time.Duration
 	opts      *extproc.ProcessingOptions
 	logger    *slog.Logger
 	closeOnce sync.Once
@@ -42,20 +44,34 @@ type ChainProcessor struct {
 // (fail_open is absorbed inside the chain), while the SDK layer keeps
 // fail-closed as the last line of defense — otherwise "chain configured as
 // fail_closed but SDK swallows the error" would silently break the semantics.
-func New(name string, logger *slog.Logger) *ChainProcessor {
+// retireTTL bounds how long a hot-reload-retired chain stays around for
+// in-flight streams before its plugin instances are closed (0 disables
+// closing — discouraged when dynamic subprocess plugins are in use, since
+// their processes would leak).
+func New(name string, retireTTL time.Duration, logger *slog.Logger) *ChainProcessor {
 	opts := extproc.NewDefaultProcessingOptions()
 	opts.AbortOnProcessorFailure = true
 	opts.UpdateDurationHeader = false
-	return &ChainProcessor{name: name, opts: opts, logger: logger}
+	return &ChainProcessor{name: name, retireTTL: retireTTL, opts: opts, logger: logger}
 }
 
-// SwapChain atomically replaces the route table (hot-reload entry point). The
-// old table is NOT closed (see the plugin.Plugin.Close contract: plugins must
-// not hold resources that need explicit release).
+// SwapChain atomically replaces the route table (hot-reload entry point).
+// The replaced table is retired: in-flight streams keep using it (it stays
+// reachable via their stashed chain), and after retireTTL its plugin
+// instances are closed — which is what reclaims dynamic subprocess plugins;
+// in-process plugins only see their (idempotent) Close.
 func (p *ChainProcessor) SwapChain(t *plugin.RouteTable) {
 	p.mu.Lock()
-	defer p.mu.Unlock()
+	old := p.table
 	p.table = t
+	p.mu.Unlock()
+
+	if old != nil && p.retireTTL > 0 {
+		time.AfterFunc(p.retireTTL, func() {
+			p.logger.Info("closing retired plugin chain", slog.Duration("after", p.retireTTL))
+			old.CloseAll()
+		})
+	}
 }
 
 // current returns the active route table.
@@ -163,6 +179,14 @@ type streamContext struct {
 // ImmediateResponse anyway.
 func newStreamContext(rc *extproc.RequestContext) plugin.Context {
 	return &streamContext{rc: rc}
+}
+
+// NewStreamContext is the exported bridge constructor: it adapts the SDK's
+// RequestContext to the plugin.Context narrow interface. The subprocess plugin
+// runtime (internal/pluginhost) uses it so dynamic plugins see exactly the
+// same Context semantics as in the main chain.
+func NewStreamContext(rc *extproc.RequestContext) plugin.Context {
+	return newStreamContext(rc)
 }
 
 func (s *streamContext) ContinueRequest() error { return s.rc.ContinueRequest() }

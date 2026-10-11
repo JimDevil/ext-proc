@@ -38,6 +38,26 @@ func mustLookup(name string) (Factory, error) {
 	return f, nil
 }
 
+// Lookup finds a plugin factory by name (false when not registered). Used by
+// the subprocess plugin runtime (internal/pluginhost) to build the single
+// plugin a dynamic plugin process serves.
+func Lookup(name string) (Factory, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
+	f, ok := registry[name]
+	return f, ok
+}
+
+// MustLookup is Lookup with a panic on absence — for plugin binaries whose
+// main() blank-imports exactly one plugin package.
+func MustLookup(name string) Factory {
+	f, ok := Lookup(name)
+	if !ok {
+		panic(gerror.Newf("plugin %s is not registered; make sure main.go anonymous-imports its package", name))
+	}
+	return f
+}
+
 // BuildChain builds a single chain from the orchestration config:
 //  1. filters out plugins with enabled=false;
 //  2. creates instances from the registered factories and calls Init with the

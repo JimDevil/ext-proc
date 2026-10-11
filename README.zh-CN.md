@@ -186,6 +186,43 @@ chain:
       config: { yourKey: yourValue }   # 插件私有配置，由插件自己解析
 ```
 
+## 动态插件（子进程）
+
+插件可以**不改主二进制直接发布**：给编排项加一个 `url`，它会以子进程方式运行、讲标准 ext_proc 协议。每个实例（全局 + matchRule 变体）持有自己的子进程和合并后配置；编排（order、matchRules、failurePolicy、热更新）全部留在宿主侧。
+
+- `oci://registry/repo:tag` —— 加载时匿名拉取公开镜像，按 digest 落缓存（`server.pluginCacheDir`）；生产建议 `@sha256:...` 固定；
+- `file:///abs/path` —— 本地插件二进制（开发 / e2e）。
+
+```yaml
+chain:
+  plugins:
+    - name: echo-plugin
+      enabled: true
+      order: 30
+      failurePolicy: fail_open
+      url: oci://ghcr.io/jimdevil/extproc-plugin-echo:v0.1.0
+      timeout: 5s                       # 单阶段往返预算（默认 5s）
+      config: { value: "on" }
+      # matchRules 与编译内插件完全一致
+```
+
+行为约定：
+
+- 宿主把当前阶段的**完整状态**经一条短流发给子进程，返回的 mutation 原样回放到宿主侧 Context——增删 header、替换 body、`ImmediateResponse` 短路全部一一对应；
+- 子进程崩溃后下一次调用自动拉起（有界退避）；期间的请求由该插件项的 failurePolicy 兜底；
+- 配置热更新原子换表；被替换的子进程在 `server.retiredChainTTLSeconds`（默认 30s，在途流排空后）统一回收。
+
+怎么写：像平常一样实现 `plugin.Plugin`，再用 `internal/pluginhost` 包一个极小的 main——参考 `cmd/echo-plugin`（最小示例）与 `cmd/model-router-plugin`。线上协议就是 ext_proc 本身，所以同一个二进制也能当独立 ext_proc 服务部署，区别只在谁去连它。
+
+```go
+func main() {
+    _ "yourmodule/yourplugin" // init() 里 plugin.Register
+    pluginhost.MustServe("your-plugin", slog.New(slog.NewTextHandler(os.Stderr, nil)))
+}
+```
+
+与编译内插件的取舍：每阶段多一跳本机回环（µs 级）、每实例多一份 Go runtime（约 20MB）；动态加载意味着供应链自管（digest 固定；私有仓库请先预拉再走 `file://`）。跨插件的 `SetValue` 共享状态不跨线传输。
+
 ## 注意事项
 
 - **热更新**：修改 `config.yaml` 后 filter chain 自动重建（新请求走新链，在途请求走旧链）；插件实例视为不可变，不要在实例上存跨请求可变状态。

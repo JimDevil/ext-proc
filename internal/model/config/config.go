@@ -61,6 +61,16 @@ type ServerConfig struct {
 	// TerminationGracePeriodSeconds bounds the in-flight stream drain; past
 	// it the process force-exits.
 	TerminationGracePeriodSeconds int32 `json:"terminationGracePeriodSeconds" yaml:"terminationGracePeriodSeconds"`
+	// PluginCacheDir is where dynamic subprocess plugin images pulled from
+	// OCI registries are extracted (digest-addressed); empty falls back to
+	// <user cache dir>/ext-proc/plugins. Mount a persistent volume in k8s so
+	// restarts do not re-pull.
+	PluginCacheDir string `json:"pluginCacheDir" yaml:"pluginCacheDir"`
+	// RetiredChainTTLSeconds bounds how long a hot-reload-retired plugin
+	// chain stays alive for in-flight streams before its instances are
+	// closed; this is what reclaims dynamic subprocess plugins on config
+	// change. Values <= 0 fall back to 30.
+	RetiredChainTTLSeconds int `json:"retiredChainTTLSeconds" yaml:"retiredChainTTLSeconds"`
 }
 
 // ChainConfig is the chain orchestration config (type alias to

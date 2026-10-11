@@ -94,13 +94,22 @@ func (m *MockContext) CancelRequest(status int32, headers map[string]extproc.Hea
 	return nil
 }
 
+// headerValueString renders a HeaderValue the way the wire does: RawValue is
+// the canonical form (the SDK always populates it), Value is the fallback.
+func headerValueString(hv extproc.HeaderValue) string {
+	if len(hv.RawValue) > 0 {
+		return string(hv.RawValue)
+	}
+	return hv.Value
+}
+
 func (m *MockContext) AppendHeader(name string, hv extproc.HeaderValue) error {
-	m.ops = append(m.ops, HeaderOp{Action: "append", Name: name, Value: hv.Value})
+	m.ops = append(m.ops, HeaderOp{Action: "append", Name: name, Value: headerValueString(hv)})
 	return nil
 }
 
 func (m *MockContext) OverwriteHeader(name string, hv extproc.HeaderValue) error {
-	m.ops = append(m.ops, HeaderOp{Action: "overwrite", Name: name, Value: hv.Value})
+	m.ops = append(m.ops, HeaderOp{Action: "overwrite", Name: name, Value: headerValueString(hv)})
 	return nil
 }
 

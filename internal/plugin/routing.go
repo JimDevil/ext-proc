@@ -143,9 +143,19 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 			logger.Info("plugin disabled, skipping", slog.String("plugin", pc.Name))
 			continue
 		}
-		f, err := mustLookup(pc.Name)
-		if err != nil {
-			return nil, err
+
+		// Instance builder: dynamic subprocess plugins resolve through the
+		// installed DynamicLoader (each instance = its own subprocess);
+		// compiled-in plugins go through the factory registry.
+		var build func(cfg *gjson.Json) (Plugin, error)
+		if pc.URL != "" {
+			build = func(c *gjson.Json) (Plugin, error) { return loadDynamic(pc, c, logger) }
+		} else {
+			f, err := mustLookup(pc.Name)
+			if err != nil {
+				return nil, err
+			}
+			build = func(c *gjson.Json) (Plugin, error) { return buildInstance(f, c, pc.Name, logger) }
 		}
 
 		failOpen, err := resolveFailOpen(pc.FailurePolicy, cfg.FailurePolicy, pc.Name)
@@ -153,7 +163,7 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 			return nil, err
 		}
 
-		global, err := buildInstance(f, pluginConfigNode(tree, i), pc.Name, logger)
+		global, err := build(pluginConfigNode(tree, i))
 		if err != nil {
 			return nil, gerror.Wrapf(err, "plugin %s failed to initialize", pc.Name)
 		}
@@ -167,7 +177,7 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 				continue
 			}
 			merged := mergedConfigNode(pluginConfigNode(tree, i), ruleConfigNode(tree, i, j))
-			inst, err := buildInstance(f, merged, pc.Name, logger)
+			inst, err := build(merged)
 			if err != nil {
 				return nil, gerror.Wrapf(err, "plugin %s matchRule #%d failed to initialize", pc.Name, j)
 			}
