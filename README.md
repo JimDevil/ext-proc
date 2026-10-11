@@ -6,7 +6,7 @@ Move gateway plugins out of WASM — a responsibility-chain plugin framework bui
 
 Every plugin is just a Go package behind a standard gRPC service: deploy and scale independently, crashes never take down Envoy. Hot-reloadable config, chain orchestration, and two LLM-gateway plugins out of the box.
 
-> **💡 Use it as a scaffold.** This repo is a ready-to-clone starting point for developing your own ext_proc filter: clone it, remove the two sample plugins (their packages under `internal/plugins/`, their imports in `main.go`, and their segments in `config.yaml` — or simply set `enabled: false`), then develop your business logic in `internal/plugins/<your-plugin>`. Everything a data-plane service needs — chain orchestration, hot reload, metrics, graceful shutdown, panic recovery — is handled by the framework. The two built-in plugins double as working reference implementations: keep them, study them, or delete them. See [Write your own plugin](#write-your-own-plugin).
+> **💡 Use it as a scaffold.** This repo is a ready-to-clone starting point for developing your own ext_proc filter: clone it, remove the two sample plugins (their packages under `internal/plugins/`, their imports in `main.go`, and their segments in `config.yaml` — or simply set `enabled: false`), then develop your business logic in `internal/plugins/<your-plugin>`. Everything a data-plane service needs — chain orchestration, hot reload, metrics, graceful shutdown, panic recovery — is handled by the framework. The two sample plugins double as working reference implementations: keep them, study them, or delete them. See [Write your own plugin](#write-your-own-plugin).
 
 ## Why leave WASM behind
 
@@ -48,7 +48,7 @@ One stream per request · one goroutine per stream · an `ImmediateResponse` sho
 - **Observability** — Prometheus metrics (streams, phase errors, duration histograms), gRPC health checks, structured slog logging; per-phase latency is available to Envoy access logs via filter state.
 - **Production engineering** — three-step graceful drain (unready → propagation delay → bounded stop); gRPC flow control delegated to Envoy backpressure; **panic recovery** — a processor panic terminates only the current stream, tracked by `extproc_panic_recoveries_total`.
 
-## Built-in plugins
+## Sample plugins
 
 ### `model-router` *(migrated from the higress model-router plugin)*
 
@@ -191,7 +191,7 @@ chain:
 - **Hot reload**: editing `config.yaml` rebuilds the chain automatically (new requests use the new chain, in-flight requests the old one). Plugin instances are immutable — never keep cross-request mutable state on an instance.
 - **Envoy-protected headers**: `:method`, `:authority`, `host` and `x-envoy-*` cannot be rewritten; Envoy rejects those mutations.
 - **Content-Length**: Envoy strips it automatically when a plugin mutates the body; plugins never need to touch it.
-- **Large bodies**: under `BUFFERED` the body is limited by Envoy's `max_message_bytes`; for very large requests use `STREAMED` and parse incrementally. Both built-in plugins assume BUFFERED full-body semantics (aligned with their higress originals).
+- **Large bodies**: under `BUFFERED` the body is limited by Envoy's `max_message_bytes`; for very large requests use `STREAMED` and parse incrementally. Both sample plugins assume BUFFERED full-body semantics (aligned with their higress originals).
 - **SDK**: the ext_proc server SDK lives in-tree at [`sdk/`](sdk/) (forked from [wrossmorrow/envoy-extproc-sdk-go](https://github.com/wrossmorrow/envoy-extproc-sdk-go), refactored and maintained here — see its README for the changes).
 
 ## License

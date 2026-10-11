@@ -6,7 +6,7 @@
 
 每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、责任链编排，开箱即用两个 LLM 网关插件。
 
-> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——责任链、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个内置插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
+> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——责任链、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个示例插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
 
 ## 为什么离开 WASM
 
@@ -48,7 +48,7 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 - **可观测性** —— Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志；Envoy 侧每阶段延迟可通过 filter state 进 access log。
 - **生产工程** —— 三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC 流控交给 Envoy 背压；**panic 防护** —— 处理器 panic 只终结当前流，由 `extproc_panic_recoveries_total` 计数。
 
-## 内置插件
+## 示例插件
 
 ### `model-router` *（迁移自 higress model-router 插件）*
 
