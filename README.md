@@ -186,9 +186,23 @@ chain:
       config: { yourKey: yourValue }   # plugin-private config, parsed by the plugin itself
 ```
 
+## Performance: ext_proc vs wasmPlugin
+
+Measured end to end on a single-node k8s with a Higress 2.2.4 gateway and a streaming LLM-style SSE upstream: the same semantic work (extract `model` → inject header) run once as the official higress `model-router` **wasmPlugin** and once as this repo's 2-plugin **ext_proc** chain. 3 interleaved rounds at 16 concurrency, plus a 64-concurrency saturation probe. Full methodology, raw data and harness: [docs/benchmark.md](docs/benchmark.md) (`manifest/benchmark/`).
+
+| TTFT (ms) | mean | p50 | p90 | p99 |
+|---|---|---|---|---|
+| baseline (no plugin) | 5.24 | 4.62 | 9.86 | 18.30 |
+| wasmPlugin (in-process) | 4.93 | 4.06 | 9.25 | 16.28 |
+| ext_proc (2-plugin chain) | 5.78 | 4.80 | 9.74 | 19.37 |
+
+- **TTFT**: both runtimes stay within ~1ms of the no-plugin baseline at p50 — at real LLM TTFT scales (hundreds of ms and up) the plugin runtime is not a TTFT factor.
+- **Throughput ceiling**: at 64-way concurrency the wasmPlugin holds baseline (−0.7% rps, TTFT p50 +1.6ms); the ext_proc chain gives back ~3% rps (TTFT p50 +8ms) for its per-phase gRPC round trips.
+- **Where ext_proc time goes**: the plugin work itself is µs-scale (`extproc_phase_duration_seconds`: 7–21µs per phase); the measured cost is the hop mechanics, not the logic — and that hop buys process isolation, native Go tooling and independent deployment.
+
 ## Notes
 
-- **Hot reload**: editing `config.yaml` rebuilds the chain automatically (new requests use the new chain, in-flight requests the old one). Plugin instances are immutable — never keep cross-request mutable state on an instance.
+- **Hot reload**: editing `config.yaml` rebuilds the chain automatically (new requests use the new chain, in-flight requests the old one). Plugin instances are immutable — never keep cross-request mutable state on an instance. Caveat: GoFrame gcfg watches the file inode, which **does not fire on k8s ConfigMap mounts** (kubelet swaps them via a symlink rename) — restart the pod after ConfigMap changes, or edit the mounted file in place from a shared volume.
 - **Envoy-protected headers**: `:method`, `:authority`, `host` and `x-envoy-*` cannot be rewritten; Envoy rejects those mutations.
 - **Content-Length**: Envoy strips it automatically when a plugin mutates the body; plugins never need to touch it.
 - **Large bodies**: under `BUFFERED` the body is limited by Envoy's `max_message_bytes`; for very large requests use `STREAMED` and parse incrementally. Both sample plugins assume BUFFERED full-body semantics (aligned with their higress originals).

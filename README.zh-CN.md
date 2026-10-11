@@ -186,9 +186,23 @@ chain:
       config: { yourKey: yourValue }   # 插件私有配置，由插件自己解析
 ```
 
+## 性能：ext_proc vs wasmPlugin
+
+在单节点 k8s（Higress 2.2.4 网关 + 流式 LLM 风格 SSE 上游）上端到端实测：同样的语义工作（提取 `model` → 注入 header）分别以官方 higress `model-router` **wasmPlugin** 和本仓库双插件 **ext_proc** 链运行。16 并发 3 轮交替 + 64 并发饱和探测。完整方法、原始数据与复现工具：[docs/benchmark.md](docs/benchmark.md)（工具在 `manifest/benchmark/`）。
+
+| TTFT（ms） | mean | p50 | p90 | p99 |
+|---|---|---|---|---|
+| 基线（无插件） | 5.24 | 4.62 | 9.86 | 18.30 |
+| wasmPlugin（进程内） | 4.93 | 4.06 | 9.25 | 16.28 |
+| ext_proc（双插件链） | 5.78 | 4.80 | 9.74 | 19.37 |
+
+- **TTFT**：两种方式 p50 与无插件基线的差距都在 ~1ms 内——相对真实 LLM 的 TTFT（数百 ms 起），插件运行时不是 TTFT 的影响因素。
+- **吞吐上限**：64 并发下 wasmPlugin 与基线持平（rps −0.7%，TTFT p50 +1.6ms）；ext_proc 链为每阶段的 gRPC 往返付出约 3% rps（TTFT p50 +8ms）。
+- **ext_proc 的时间花在哪**：插件逻辑本身是 µs 级（`extproc_phase_duration_seconds`：每相位 7–21µs）；测到的开销来自跨进程跳转机制而非逻辑——这个跳转换来的是进程隔离、原生 Go 工具链与独立部署。
+
 ## 注意事项
 
-- **热更新**：修改 `config.yaml` 后 filter chain 自动重建（新请求走新链，在途请求走旧链）；插件实例视为不可变，不要在实例上存跨请求可变状态。
+- **热更新**：修改 `config.yaml` 后 filter chain 自动重建（新请求走新链，在途请求走旧链）；插件实例视为不可变，不要在实例上存跨请求可变状态。注意：GoFrame gcfg 监听的是文件 inode，**k8s ConfigMap 挂载不会触发**（kubelet 以符号链接重命名方式原子替换）——改完 ConfigMap 请重启 Pod，或用共享卷就地编辑文件。
 - **Envoy 受保护头**：`:method`、`:authority`、`host`、`x-envoy-*` 不可改写，Envoy 侧会拒绝。
 - **Content-Length**：插件改写 body 时 Envoy 自动剥除，无需插件处理。
 - **大 body**：`BUFFERED` 模式下受 Envoy `max_message_bytes` 限制；超大请求建议 `STREAMED` + 流式解析。当前两个插件均假设 BUFFERED 全量语义（与 higress 原实现对齐）。

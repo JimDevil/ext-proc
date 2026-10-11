@@ -1,0 +1,44 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ext-proc-perf-config
+  namespace: higress-cj
+data:
+  config.yaml: |
+    app:
+      name: ext-proc
+      version: perf
+    logger:
+      level: info
+    server:
+      extProcPort: 50051
+      metricsPort: 19090
+      maxConcurrentStreams: 2000
+      unreadyPropagationDelaySeconds: 2
+      terminationGracePeriodSeconds: 15
+    chain:
+      failurePolicy: fail_closed
+      plugins:
+        - name: model-router
+          enabled: true
+          order: 10
+          config:
+            modelKey: model
+            modelToHeader: x-higress-llm-model
+            addProviderHeader: ""
+            keepOriginalModelName: false
+            enableOnPathSuffix:
+              - /chat/completions
+            autoRouting:
+              enable: false
+            rules: []
+        - name: apikey-extract
+          enabled: true
+          order: 20
+          config:
+            sources:
+              - type: header
+                name: x-api-key
+            targetHeader: x-extracted-apikey
+            stripSource: false
+            required: false
