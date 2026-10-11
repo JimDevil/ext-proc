@@ -3,6 +3,7 @@ package plugin
 import (
 	"log/slog"
 	"net"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -129,6 +130,8 @@ func (t *RouteTable) CloseAll() {
 // deep-merged over the global node (a rule with disable: true becomes a
 // disable marker instead). Instances are per variant on purpose — different
 // routes may run the same plugin with different configs simultaneously.
+// Slots are sorted stably by order (ascending; equal orders keep the
+// config-file order) — the same chain-position contract as buildOneChain.
 func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*RouteTable, error) {
 	t := &RouteTable{
 		failOpen: cfg.FailurePolicy == "fail_open",
@@ -175,6 +178,8 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 
 		t.slots = append(t.slots, slot)
 	}
+
+	sort.SliceStable(t.slots, func(i, j int) bool { return t.slots[i].pc.Order < t.slots[j].pc.Order })
 
 	logger.Info("plugin route table ready",
 		slog.Any("plugins", t.Names()), slog.Int("matchRules", t.RuleCount()))

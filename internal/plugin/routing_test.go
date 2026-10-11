@@ -158,6 +158,34 @@ func TestBuildRouteTableUnknownPlugin(t *testing.T) {
 	}
 }
 
+func TestRouteTableSortsByOrder(t *testing.T) {
+	t.Parallel()
+
+	// Config lists the plugins out of order; the table must still compose the
+	// chain in ascending order (config-file order on ties).
+	var sortGot []string
+	Register("rt-sort-late", func() Plugin { return &capturePlugin{name: "rt-sort-late", got: &sortGot} })
+	Register("rt-sort-early", func() Plugin { return &capturePlugin{name: "rt-sort-early", got: &sortGot} })
+
+	cfg := ChainConfig{
+		Plugins: []PluginConfig{
+			{Name: "rt-sort-late", Enabled: true, Order: 30},
+			{Name: "rt-sort-early", Enabled: true, Order: 10},
+		},
+	}
+	table, err := BuildRouteTable(cfg, nil, testLogger)
+	if err != nil {
+		t.Fatalf("BuildRouteTable failed: %v", err)
+	}
+	want := []string{"rt-sort-early", "rt-sort-late"}
+	if names := table.Names(); !equalNames(names, want) {
+		t.Fatalf("slot order mismatch: got %v, want %v", names, want)
+	}
+	if names := table.Compose("any.test", "/x").Names(); !equalNames(names, want) {
+		t.Fatalf("composed chain order mismatch: got %v, want %v", names, want)
+	}
+}
+
 func TestDomainMatches(t *testing.T) {
 	t.Parallel()
 
