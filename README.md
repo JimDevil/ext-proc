@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Move gateway plugins out of WASM — a responsibility-chain plugin framework built on [Envoy](https://www.envoyproxy.io)'s [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter.
+Move gateway plugins out of WASM — a filter-chain plugin framework built on [Envoy](https://www.envoyproxy.io)'s [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter.
 
 Every plugin is just a Go package behind a standard gRPC service: deploy and scale independently, crashes never take down Envoy. Hot-reloadable config, chain orchestration, and two LLM-gateway plugins out of the box.
 
@@ -25,7 +25,7 @@ WASM plugins live inside the Envoy process — memory, failures and operations a
 ```
  Client                      Envoy Gateway                          ext-proc
 ┌───────┐   request    ┌──────────────────────┐   bidirectional  ┌───────────────────────┐
-│ curl/ │ ──────────▶  │  envoy.filters.http  │ ──────gRPC─────▶ │  responsibility chain │
+│ curl/ │ ──────────▶  │  envoy.filters.http  │ ──────gRPC─────▶ │  filter-chain         │
 │ SDK   │              │  .ext_proc           │ ◀──────────────  │  ├─ model-router      │
 └───────┘              │  (5 phases: headers, │    mutations     │  └─ apikey-extract    │
                        │   body, trailers)    │                  │  (+ your plugins)     │

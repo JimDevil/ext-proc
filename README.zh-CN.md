@@ -2,11 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-把网关插件从 WASM 迁到进程外 —— 基于 [Envoy](https://www.envoyproxy.io) [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter 的责任链插件框架。
+把网关插件从 WASM 迁到进程外 —— 基于 [Envoy](https://www.envoyproxy.io) [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter 的 filter chain 插件框架。
 
-每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、责任链编排，开箱即用两个 LLM 网关插件。
+每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、filter chain 编排，开箱即用两个 LLM 网关插件。
 
-> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——责任链、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个示例插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
+> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——filter chain、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个示例插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
 
 ## 为什么离开 WASM
 
@@ -25,7 +25,7 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 ```
  Client                      Envoy Gateway                          ext-proc
 ┌───────┐   request    ┌──────────────────────┐   bidirectional  ┌───────────────────────┐
-│ curl/ │ ──────────▶  │  envoy.filters.http  │ ──────gRPC─────▶ │  responsibility chain │
+│ curl/ │ ──────────▶  │  envoy.filters.http  │ ──────gRPC─────▶ │  filter-chain         │
 │ SDK   │              │  .ext_proc           │ ◀──────────────  │  ├─ model-router      │
 └───────┘              │  (5 phases: headers, │    mutations     │  └─ apikey-extract    │
                        │   body, trailers)    │                  │  (+ your plugins)     │
@@ -41,9 +41,9 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 
 ## 核心特性
 
-- **责任链编排** —— 按配置 `order` 升序执行，任一插件短路即停止后续插件；插件之间零依赖，只共享请求级状态。
+- **filter chain 编排** —— 按配置 `order` 升序执行，任一插件短路即停止后续插件；插件之间零依赖，只共享请求级状态。
 - **标准化插件接入** —— 六阶段回调 + `BasePlugin` 空实现 + `init()` 自注册：一个包、五步接入、互不影响。
-- **配置热更新** —— GoFrame gcfg watch `config.yaml`，责任链原子重建；在途请求继续走旧链，全程零重启。
+- **配置热更新** —— GoFrame gcfg watch `config.yaml`，filter chain 原子重建；在途请求继续走旧链，全程零重启。
 - **双层容错** —— 链级 `fail_open` / `fail_closed` 与 Envoy `failure_mode_allow` 对齐，且每个插件可单独覆盖（`plugins[].failurePolicy`）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。静默放行必有指标可查、可告警。
 - **可观测性** —— Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志；Envoy 侧每阶段延迟可通过 filter state 进 access log。
 - **生产工程** —— 三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC 流控交给 Envoy 背压；**panic 防护** —— 处理器 panic 只终结当前流，由 `extproc_panic_recoveries_total` 计数。
@@ -188,7 +188,7 @@ chain:
 
 ## 注意事项
 
-- **热更新**：修改 `config.yaml` 后责任链自动重建（新请求走新链，在途请求走旧链）；插件实例视为不可变，不要在实例上存跨请求可变状态。
+- **热更新**：修改 `config.yaml` 后 filter chain 自动重建（新请求走新链，在途请求走旧链）；插件实例视为不可变，不要在实例上存跨请求可变状态。
 - **Envoy 受保护头**：`:method`、`:authority`、`host`、`x-envoy-*` 不可改写，Envoy 侧会拒绝。
 - **Content-Length**：插件改写 body 时 Envoy 自动剥除，无需插件处理。
 - **大 body**：`BUFFERED` 模式下受 Envoy `max_message_bytes` 限制；超大请求建议 `STREAMED` + 流式解析。当前两个插件均假设 BUFFERED 全量语义（与 higress 原实现对齐）。
