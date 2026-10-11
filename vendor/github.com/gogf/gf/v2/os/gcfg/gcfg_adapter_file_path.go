@@ -1,0 +1,298 @@
+// Copyright GoFrame Author(https://goframe.org). All Rights Reserved.
+//
+// This Source Code Form is subject to the terms of the MIT License.
+// If a copy of the MIT was not distributed with this file,
+// You can obtain one at https://github.com/gogf/gf.
+
+package gcfg
+
+import (
+	"bytes"
+	"context"
+	"fmt"
+	"os"
+
+	"github.com/gogf/gf/v2/errors/gcode"
+	"github.com/gogf/gf/v2/errors/gerror"
+	"github.com/gogf/gf/v2/internal/intlog"
+	"github.com/gogf/gf/v2/os/gfile"
+	"github.com/gogf/gf/v2/os/gres"
+	"github.com/gogf/gf/v2/os/gspath"
+	"github.com/gogf/gf/v2/text/gstr"
+)
+
+// SetPath sets the configuration `directory` path for file search.
+// The parameter `path` can be absolute or relative `directory` path,
+// but absolute `directory` path is strongly recommended.
+//
+// Note that this parameter is a path to a directory not a file.
+func (a *AdapterFile) SetPath(directoryPath string) (err error) {
+	var (
+		isDir    = false
+		realPath = ""
+	)
+	if file := gres.Get(directoryPath); file != nil {
+		realPath = directoryPath
+		isDir = file.FileInfo().IsDir()
+	} else {
+		// Absolute path.
+		realPath = gfile.RealPath(directoryPath)
+		if realPath == "" {
+			// Relative path.
+			a.searchPaths.RLockFunc(func(array []string) {
+				for _, v := range array {
+					if searchedPath, _ := gspath.Search(v, directoryPath); searchedPath != "" {
+						realPath = searchedPath
+						break
+					}
+				}
+			})
+		}
+		if realPath != "" {
+			isDir = gfile.IsDir(realPath)
+		}
+	}
+	// Path not exist.
+	if realPath == "" {
+		buffer := bytes.NewBuffer(nil)
+		if a.searchPaths.Len() > 0 {
+			fmt.Fprintf(buffer,
+				`SetPath failed: cannot find directory "%s" in following paths:`,
+				directoryPath,
+			)
+			a.searchPaths.RLockFunc(func(array []string) {
+				for k, v := range array {
+					fmt.Fprintf(buffer, "\n%d. %s", k+1, v)
+				}
+			})
+		} else {
+			fmt.Fprintf(buffer,
+				`SetPath failed: path "%s" does not exist`,
+				directoryPath,
+			)
+		}
+		return gerror.New(buffer.String())
+	}
+	// Should be a directory.
+	if !isDir {
+		return gerror.NewCodef(
+			gcode.CodeInvalidParameter,
+			`SetPath failed: path "%s" should be directory type`,
+			directoryPath,
+		)
+	}
+	// Repeated path check.
+	if a.searchPaths.Search(realPath) != -1 {
+		return nil
+	}
+	a.jsonMap.Clear()
+	a.searchPaths.Clear()
+	a.searchPaths.Append(realPath)
+	intlog.Print(context.TODO(), "SetPath:", realPath)
+	return nil
+}
+
+// AddPath adds an absolute or relative `directory` path to the search paths.
+//
+// Note that this parameter is paths to a directories not files.
+func (a *AdapterFile) AddPath(directoryPaths ...string) (err error) {
+	for _, directoryPath := range directoryPaths {
+		if err = a.doAddPath(directoryPath); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// doAddPath adds an absolute or relative `directory` path to the search paths.
+func (a *AdapterFile) doAddPath(directoryPath string) (err error) {
+	var (
+		isDir    = false
+		realPath = ""
+	)
+	// It firstly checks the resource manager,
+	// and then checks the filesystem for the path.
+	if file := gres.Get(directoryPath); file != nil {
+		realPath = directoryPath
+		isDir = file.FileInfo().IsDir()
+	} else {
+		// Absolute path.
+		realPath = gfile.RealPath(directoryPath)
+		if realPath == "" {
+			// Relative path.
+			a.searchPaths.RLockFunc(func(array []string) {
+				for _, v := range array {
+					if searchedPath, _ := gspath.Search(v, directoryPath); searchedPath != "" {
+						realPath = searchedPath
+						break
+					}
+				}
+			})
+		}
+		if realPath != "" {
+			isDir = gfile.IsDir(realPath)
+		}
+	}
+	if realPath == "" {
+		buffer := bytes.NewBuffer(nil)
+		if a.searchPaths.Len() > 0 {
+			fmt.Fprintf(buffer,
+				`AddPath failed: cannot find directory "%s" in following paths:`,
+				directoryPath)
+			a.searchPaths.RLockFunc(func(array []string) {
+				for k, v := range array {
+					fmt.Fprintf(buffer, "\n%d. %s", k+1, v)
+				}
+			})
+		} else {
+			fmt.Fprintf(buffer,
+				`AddPath failed: path "%s" does not exist`,
+				directoryPath)
+		}
+		return gerror.New(buffer.String())
+	}
+	if !isDir {
+		return gerror.NewCodef(
+			gcode.CodeInvalidParameter,
+			`AddPath failed: path "%s" should be directory type`,
+			directoryPath,
+		)
+	}
+	// Repeated path check.
+	if a.searchPaths.Search(realPath) != -1 {
+		return nil
+	}
+	a.searchPaths.Append(realPath)
+	intlog.Print(context.TODO(), "AddPath:", realPath)
+	return nil
+}
+
+// GetPaths returns the searching directory path array of current configuration manager.
+func (a *AdapterFile) GetPaths() []string {
+	return a.searchPaths.Slice()
+}
+
+// doGetFilePath returns the absolute configuration file path for the given filename by `fileNameOrPath`.
+// The `fileNameOrPath` can be either a file name or the file path.
+func (a *AdapterFile) doGetFilePath(fileNameOrPath string) (filePath string) {
+	var (
+		tempPath string
+		resFile  *gres.File
+		fileInfo os.FileInfo
+	)
+	// Searching resource manager.
+	if !gres.IsEmpty() {
+		for _, tryFolder := range resourceTryFolders {
+			tempPath = tryFolder + fileNameOrPath
+			if resFile = gres.Get(tempPath); resFile != nil {
+				fileInfo, _ = resFile.Stat()
+				if fileInfo != nil && !fileInfo.IsDir() {
+					filePath = resFile.Name()
+					return
+				}
+			}
+		}
+		a.searchPaths.RLockFunc(func(array []string) {
+			for _, searchPath := range array {
+				for _, tryFolder := range resourceTryFolders {
+					tempPath = searchPath + tryFolder + fileNameOrPath
+					if resFile = gres.Get(tempPath); resFile != nil {
+						fileInfo, _ = resFile.Stat()
+						if fileInfo != nil && !fileInfo.IsDir() {
+							filePath = resFile.Name()
+							return
+						}
+					}
+				}
+			}
+		})
+	}
+
+	a.autoCheckAndAddMainPkgPathToSearchPaths()
+
+	// Searching local file system.
+	if filePath == "" {
+		a.searchPaths.RLockFunc(func(array []string) {
+			for _, searchPath := range array {
+				searchPath = gstr.TrimRight(searchPath, `\/`)
+				for _, tryFolder := range localSystemTryFolders {
+					relativePath := gstr.TrimRight(
+						gfile.Join(tryFolder, fileNameOrPath),
+						`\/`,
+					)
+					if filePath, _ = gspath.Search(searchPath, relativePath); filePath != "" &&
+						!gfile.IsDir(filePath) {
+						return
+					}
+				}
+			}
+		})
+	}
+	// The `fileNameOrPath` can be a file path.
+	if filePath == "" {
+		if filePath = gfile.RealPath(fileNameOrPath); filePath != "" && !gfile.IsDir(filePath) {
+			return
+		}
+	}
+	return
+}
+
+// GetFilePath returns the absolute configuration file path for the given filename by `file`.
+// If `file` is not passed, it returns the configuration file path of the default name.
+// It returns an empty `path` string and an error if the given `file` does not exist.
+func (a *AdapterFile) GetFilePath(fileNameOrPath ...string) (filePath string, err error) {
+	var (
+		fileExtName        string
+		tempFileNameOrPath string
+		usedFileNameOrPath = a.defaultFileNameOrPath.String()
+	)
+	if len(fileNameOrPath) > 0 {
+		usedFileNameOrPath = fileNameOrPath[0]
+	}
+	fileExtName = gfile.ExtName(usedFileNameOrPath)
+	if filePath = a.doGetFilePath(usedFileNameOrPath); (filePath == "" || gfile.IsDir(filePath)) &&
+		!gstr.InArray(supportedFileTypes, fileExtName) {
+		// If it's not using default configuration or its configuration file is not available,
+		// it searches the possible configuration file according to the name and all supported
+		// file types.
+		for _, fileType := range supportedFileTypes {
+			tempFileNameOrPath = fmt.Sprintf(`%s.%s`, usedFileNameOrPath, fileType)
+			if filePath = a.doGetFilePath(tempFileNameOrPath); filePath != "" {
+				break
+			}
+		}
+	}
+	// If it cannot find the filePath of `file`, it formats and returns a detailed error.
+	if filePath == "" {
+		var buffer = bytes.NewBuffer(nil)
+		if a.searchPaths.Len() > 0 {
+			if !gstr.InArray(supportedFileTypes, fileExtName) {
+				fmt.Fprintf(buffer,
+					`possible config files "%s" or "%s" not found in resource manager or following system searching paths:`,
+					usedFileNameOrPath, fmt.Sprintf(`%s.%s`, usedFileNameOrPath, gstr.Join(supportedFileTypes, "/")))
+			} else {
+				fmt.Fprintf(buffer,
+					`specified config file "%s" not found in resource manager or following system searching paths:`,
+					usedFileNameOrPath)
+			}
+			a.searchPaths.RLockFunc(func(array []string) {
+				index := 1
+				for _, searchPath := range array {
+					searchPath = gstr.TrimRight(searchPath, `\/`)
+					for _, tryFolder := range localSystemTryFolders {
+						fmt.Fprintf(buffer,
+							"\n%d. %s",
+							index, gfile.Join(searchPath, tryFolder))
+						index++
+					}
+				}
+			})
+		} else {
+			fmt.Fprintf(buffer,
+				`cannot find config file "%s" with no filePath configured`,
+				usedFileNameOrPath)
+		}
+		err = gerror.NewCode(gcode.CodeNotFound, buffer.String())
+	}
+	return
+}

@@ -1,0 +1,63 @@
+# E2E verification resources: an echo upstream (reflects request headers)
+# plus a test Ingress. Used together with manifest/envoyfilter-demo.yaml to
+# verify the ext_proc chain end to end.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extproc-echo
+  namespace: higress-cj
+  labels:
+    app: extproc-echo
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: extproc-echo
+  template:
+    metadata:
+      labels:
+        app: extproc-echo
+    spec:
+      containers:
+        - name: echo
+          image: echoserver:extproc-e2e
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8080
+            initialDelaySeconds: 2
+            periodSeconds: 5
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: extproc-echo
+  namespace: higress-cj
+spec:
+  selector:
+    app: extproc-echo
+  ports:
+    - port: 80
+      targetPort: 8080
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: extproc-echo
+  namespace: higress-cj
+spec:
+  ingressClassName: higress-cj
+  rules:
+    - host: extproc.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: extproc-echo
+                port:
+                  number: 80

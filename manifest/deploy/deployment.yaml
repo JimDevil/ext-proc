@@ -1,0 +1,87 @@
+# Standalone deployment (cross-pod): ext_proc runs as a regular Deployment and
+# is reached by Envoy through a Service. For the recommended same-pod sidecar
+# layout see the README; this manifest is for quick verification.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ext-proc-config
+  namespace: envoy-gateway-system
+data:
+  config.yaml: |
+    app:
+      name: ext-proc
+      version: v0.1.0
+    logger:
+      level: info
+    server:
+      extProcPort: 50051
+      metricsPort: 9090
+      maxConcurrentStreams: 1000
+      unreadyPropagationDelaySeconds: 5
+      terminationGracePeriodSeconds: 15
+    chain:
+      failurePolicy: fail_closed
+      plugins: []   # keep in sync with manifest/config/config.yaml (omitted here; fill in before deploying)
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ext-proc
+  namespace: envoy-gateway-system
+  labels:
+    app: ext-proc
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: ext-proc
+  template:
+    metadata:
+      labels:
+        app: ext-proc
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9090"
+        prometheus.io/path: /metrics
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: extproc
+          image: ghcr.io/JimDevil/ext-proc:v0.1.0  # adjust to your registry
+          ports:
+            - name: grpc
+              containerPort: 50051
+            - name: metrics
+              containerPort: 9090
+          volumeMounts:
+            - name: config
+              mountPath: /app/manifest/config
+              readOnly: true
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              memory: 1Gi
+      volumes:
+        - name: config
+          configMap:
+            name: ext-proc-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ext-proc
+  namespace: envoy-gateway-system
+spec:
+  selector:
+    app: ext-proc
+  ports:
+    - name: grpc
+      port: 50051
+      targetPort: 50051

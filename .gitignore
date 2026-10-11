@@ -1,0 +1,12 @@
+# 调试产物
+__debug_bin*
+
+# 本地构建产物
+bin/
+/ext-proc
+log/
+
+# 编辑器
+.DS_Store
+.idea/
+.vscode/

@@ -1,0 +1,219 @@
+version: "2"
+run:
+  concurrency: 4
+  modules-download-mode: readonly
+  issues-exit-code: 2
+  tests: false
+  allow-parallel-runners: true
+  allow-serial-runners: true
+linters:
+  default: none
+  enable:
+    - errcheck
+    - errchkjson
+    - funlen
+    - goconst
+    - gocritic
+    - govet
+    - misspell
+    - nolintlint
+    - revive
+    - staticcheck
+    - usestdlibvars
+    - whitespace
+  settings:
+    funlen:
+      lines: 340
+      statements: -1
+    goconst:
+      match-constant: false
+      min-len: 4
+      min-occurrences: 30
+      numbers: true
+      min: 5
+      max: 20
+      ignore-calls: false
+    gocritic:
+      disabled-checks:
+        - ifElseChain
+        - assignOp
+        - appendAssign
+        - singleCaseSwitch
+        - regexpMust
+        - typeSwitchVar
+        - elseif
+    govet:
+      disable:
+        - asmdecl
+        - assign
+        - atomic
+        - atomicalign
+        - bools
+        - buildtag
+        - cgocall
+        - composites
+        - copylocks
+        - deepequalerrors
+        - errorsas
+        - fieldalignment
+        - findcall
+        - framepointer
+        - httpresponse
+        - ifaceassert
+        - loopclosure
+        - lostcancel
+        - nilfunc
+        - nilness
+        - reflectvaluecompare
+        - shift
+        - shadow
+        - sigchanyzer
+        - sortslice
+        - stdmethods
+        - stringintconv
+        - structtag
+        - testinggoroutine
+        - tests
+        - unmarshal
+        - unreachable
+        - unsafeptr
+        - unusedwrite
+      enable-all: true
+      settings:
+        printf:
+          funcs:
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Infof
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Warnf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Errorf
+            - (github.com/golangci/golangci-lint/pkg/logutils.Log).Fatalf
+        unusedresult:
+          funcs:
+            - pkg.MyFunc
+            - context.WithCancel
+          stringmethods:
+            - MyMethod
+    misspell:
+      locale: US
+      ignore-rules:
+        - cancelled
+    revive:
+      severity: error
+      rules:
+        - name: atomic
+        - name: line-length-limit
+          arguments:
+            - 380
+          severity: error
+        - name: unhandled-error
+          severity: warning
+          disabled: true
+        - name: var-naming
+          arguments:
+            - - ID
+              - URL
+              - IP
+              - HTTP
+              - JSON
+              - API
+              - UID
+              - Id
+              - Api
+              - Uid
+              - Http
+              - Json
+              - Ip
+              - Url
+            - - VM
+          severity: warning
+          disabled: true
+        - name: string-format
+          arguments:
+            - - core.WriteError[1].Message
+              - /^([^A-Z]|$)/
+              - must not start with a capital letter
+            - - fmt.Errorf[0]
+              - /(^|[^\.!?])$/
+              - must not end in punctuation
+            - - panic
+              - /^[^\n]*$/
+              - must not contain line breaks
+          severity: warning
+          disabled: false
+        - name: function-result-limit
+          arguments:
+            - 4
+          severity: warning
+          disabled: false
+    staticcheck:
+      checks: [ "all","-S1000","-S1009","-S1016","-S1023","-S1025","-S1029","-S1034","-S1040","-SA1016","-SA1019","-SA1029","-SA4006","-SA4015","-SA6003","-SA9003","-ST1003","-QF1001","-QF1002","-QF1003","-QF1006","-QF1007","-QF1008","-QF1011","-QF1012","-ST1011" ]
+      initialisms: [ "ACL", "API", "ASCII", "CPU", "CSS", "DNS", "EOF", "GUID", "HTML", "HTTP", "HTTPS", "ID", "IP", "JSON", "QPS", "RAM", "RPC", "SLA", "SMTP", "SQL", "SSH", "TCP", "TLS", "TTL", "UDP", "UI", "GID", "UID", "UUID", "URI", "URL", "UTF8", "VM", "XML", "XMPP", "XSRF", "XSS", "SIP", "RTP", "AMQP", "DB", "TS" ]
+      dot-import-whitelist: [ "fmt" ]
+      http-status-code-whitelist: [ "200", "400", "404", "500" ]
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      - linters:
+          - revive
+        path: _test\.go
+        text: context.Context should be the first parameter of a function
+      - linters:
+          - revive
+        path: _test\.go
+        text: exported func.*returns unexported type.*which can be annoying to use
+      - linters:
+          - gocritic
+        text: 'unnecessaryDefer:'
+      - linters:
+          - goconst
+        path: (.+)_test\.go
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofmt
+    - goimports
+  settings:
+    gci:
+      sections:
+        - standard
+        - blank
+        - default
+        - dot
+        - prefix(github.com/gogf/gf/v2)
+        - prefix(github.com/gogf/gf/cmd)
+        - prefix(github.com/gogf/gfcontrib)
+        - prefix(github.com/gogf/gf/example)
+      custom-order: true
+      no-lex-order: false
+    gofmt:
+      simplify: true
+      rewrite-rules:
+        - pattern: 'interface{}'
+          replacement: 'any'
+        - pattern: 'reflect.Ptr'
+          replacement: 'reflect.Pointer'
+        - pattern: 'ioutil.ReadAll'
+          replacement: 'io.ReadAll'
+        - pattern: 'ioutil.WriteFile'
+          replacement: 'os.WriteFile'
+        - pattern: 'ioutil.ReadFile'
+          replacement: 'os.ReadFile'
+        - pattern: 'ioutil.NopCloser'
+          replacement: 'io.NopCloser'
+    goimports:
+      local-prefixes:
+        - github.com/gogf/gf/v2
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

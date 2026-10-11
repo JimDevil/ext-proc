@@ -1,0 +1,87 @@
+// Copyright GoFrame Author(https://goframe.org). All Rights Reserved.
+//
+// This Source Code Form is subject to the terms of the MIT License.
+// If a copy of the MIT was not distributed with this file,
+// You can obtain one at https://github.com/gogf/gf.
+
+package converter
+
+import (
+	"reflect"
+	"strconv"
+	"strings"
+
+	"github.com/gogf/gf/v2/internal/empty"
+	"github.com/gogf/gf/v2/util/gconv/internal/localinterface"
+)
+
+// Bool converts `any` to bool.
+func (c *Converter) Bool(anyInput any) (bool, error) {
+	if empty.IsNil(anyInput) {
+		return false, nil
+	}
+	switch value := anyInput.(type) {
+	case bool:
+		return value, nil
+	case []byte:
+		if parsed, err := strconv.ParseBool(string(value)); err == nil {
+			return parsed, nil
+		}
+		if _, ok := emptyStringMap[strings.ToLower(string(value))]; ok {
+			return false, nil
+		}
+		return true, nil
+	case string:
+		if parsed, err := strconv.ParseBool(value); err == nil {
+			return parsed, nil
+		}
+		if _, ok := emptyStringMap[strings.ToLower(value)]; ok {
+			return false, nil
+		}
+		return true, nil
+	default:
+		if rv, ok := value.(reflect.Value); ok {
+			if rv.IsValid() && rv.CanInterface() {
+				return c.Bool(rv.Interface())
+			}
+		}
+		if f, ok := value.(localinterface.IBool); ok {
+			return f.Bool(), nil
+		}
+		rv := reflect.ValueOf(anyInput)
+		switch rv.Kind() {
+		case reflect.Pointer:
+			if rv.IsNil() {
+				return false, nil
+			}
+			if rv.Type().Elem().Kind() == reflect.Bool {
+				return rv.Elem().Bool(), nil
+			}
+			return c.Bool(rv.Elem().Interface())
+		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+			return rv.Int() != 0, nil
+		case reflect.Uintptr, reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+			return rv.Uint() != 0, nil
+		case reflect.Float32, reflect.Float64:
+			return rv.Float() != 0, nil
+		case reflect.Bool:
+			return rv.Bool(), nil
+		// TODO：(Map，Array，Slice，Struct) It might panic here for these types.
+		case reflect.Map, reflect.Array:
+			fallthrough
+		case reflect.Slice:
+			return rv.Len() != 0, nil
+		case reflect.Struct:
+			return true, nil
+		default:
+			s, err := c.String(anyInput)
+			if err != nil {
+				return false, err
+			}
+			if _, ok := emptyStringMap[strings.ToLower(s)]; ok {
+				return false, nil
+			}
+			return true, nil
+		}
+	}
+}

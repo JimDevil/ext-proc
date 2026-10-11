@@ -1,0 +1,154 @@
+<svg viewBox="0 0 1040 660" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC',sans-serif">
+  <defs>
+    <marker id="arrB" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#4f8cff"/>
+    </marker>
+    <marker id="arrC" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#22d3ee"/>
+    </marker>
+    <marker id="arrW" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#f7b955"/>
+    </marker>
+    <marker id="arrG" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#3ddc97"/>
+    </marker>
+    <linearGradient id="hl" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="rgba(79,140,255,.14)"/><stop offset="1" stop-color="rgba(34,211,238,.08)"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="0" y="0" width="1040" height="660" rx="16" fill="#0b1020"/>
+
+  <!-- ========== ① chain execution (per request) ========== -->
+  <text x="24" y="36" fill="#93a0bd" font-size="13" font-weight="600">① Chain execution — one chain per request</text>
+
+  <!-- request -->
+  <rect x="24" y="64" width="112" height="56" rx="10" fill="#0f1830" stroke="rgba(120,150,220,.4)"/>
+  <text x="80" y="88" text-anchor="middle" fill="#e6ecf7" font-size="13.5" font-weight="600">Request</text>
+  <text x="80" y="106" text-anchor="middle" fill="#66738f" font-size="10.5">one stream</text>
+
+  <!-- chain container -->
+  <rect x="176" y="44" width="596" height="124" rx="14" fill="rgba(34,211,238,.05)" stroke="rgba(34,211,238,.55)"/>
+  <text x="192" y="66" fill="#22d3ee" font-size="12" font-weight="600">plugin.Chain — plugins run in configured order</text>
+
+  <!-- plugin chips -->
+  <rect x="196" y="80" width="160" height="52" rx="9" fill="#0b1020" stroke="#4f8cff"/>
+  <text x="276" y="101" text-anchor="middle" fill="#e6ecf7" font-size="12" font-weight="600">model-router</text>
+  <text x="276" y="118" text-anchor="middle" fill="#93a0bd" font-size="10">order 10 · 6 callbacks</text>
+
+  <rect x="388" y="80" width="160" height="52" rx="9" fill="#0b1020" stroke="#4f8cff"/>
+  <text x="468" y="101" text-anchor="middle" fill="#e6ecf7" font-size="12" font-weight="600">apikey-extract</text>
+  <text x="468" y="118" text-anchor="middle" fill="#93a0bd" font-size="10">order 20 · 6 callbacks</text>
+
+  <rect x="580" y="80" width="170" height="52" rx="9" fill="#0b1020" stroke="#66738f" stroke-dasharray="5 4"/>
+  <text x="665" y="101" text-anchor="middle" fill="#e6ecf7" font-size="12" font-weight="600">your-plugin …</text>
+  <text x="665" y="118" text-anchor="middle" fill="#93a0bd" font-size="10">order N · 6 callbacks</text>
+
+  <!-- arrows: request -> chain -> response -->
+  <line x1="136" y1="92" x2="170" y2="92" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="360" y1="106" x2="384" y2="106" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="552" y1="106" x2="576" y2="106" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <line x1="772" y1="92" x2="810" y2="92" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+
+  <!-- response -->
+  <rect x="816" y="64" width="112" height="56" rx="10" fill="#0f1830" stroke="rgba(120,150,220,.4)"/>
+  <text x="872" y="88" text-anchor="middle" fill="#e6ecf7" font-size="13.5" font-weight="600">Response</text>
+  <text x="872" y="106" text-anchor="middle" fill="#66738f" font-size="10.5">to upstream</text>
+
+  <!-- fail_closed branch -->
+  <line x1="256" y1="132" x2="256" y2="190" stroke="#ff7b72" stroke-width="1.8" marker-end="url(#arrB)" stroke-dasharray="5 4"/>
+  <text x="264" y="166" fill="#ff7b72" font-size="10">fail_closed</text>
+  <rect x="196" y="196" width="170" height="46" rx="10" fill="#0b1020" stroke="#ff7b72" stroke-dasharray="5 4"/>
+  <text x="281" y="215" text-anchor="middle" fill="#e6ecf7" font-size="11">abort (status_on_error)</text>
+  <text x="281" y="231" text-anchor="middle" fill="#ff7b72" font-size="10">chain.failurePolicy</text>
+
+  <!-- fail_open branch: skip and continue -->
+  <path d="M 348 132 C 362 162, 374 162, 386 134" fill="none" stroke="#3ddc97" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#arrG)"/>
+  <text x="372" y="176" text-anchor="middle" fill="#3ddc97" font-size="10">fail_open: skip &amp; continue</text>
+
+  <!-- short-circuit branch -->
+  <line x1="468" y1="132" x2="468" y2="190" stroke="#f7b955" stroke-width="1.8" marker-end="url(#arrW)"/>
+  <text x="476" y="166" fill="#f7b955" font-size="10">ImmediateResponse</text>
+  <rect x="404" y="196" width="170" height="46" rx="10" fill="#0b1020" stroke="#f7b955" stroke-dasharray="5 4"/>
+  <text x="489" y="215" text-anchor="middle" fill="#e6ecf7" font-size="11">local reply</text>
+  <text x="489" y="231" text-anchor="middle" fill="#f7b955" font-size="10">later plugins skipped</text>
+
+  <!-- policy note -->
+  <text x="620" y="215" fill="#66738f" font-size="10.5">failurePolicy: fail_open | fail_closed</text>
+  <text x="620" y="231" fill="#66738f" font-size="10.5">mirrors Envoy failure_mode_allow</text>
+
+  <text x="520" y="272" text-anchor="middle" fill="#66738f" font-size="11">one stream = one goroutine · mutations accumulate per phase · a short-circuit stops the chain instantly</text>
+
+  <!-- ========== ② plugins plug in: build & hot swap ========== -->
+  <text x="24" y="316" fill="#93a0bd" font-size="13" font-weight="600">② Plugins plug in — build &amp; hot swap</text>
+
+  <!-- plugin packages -->
+  <text x="24" y="348" fill="#66738f" font-size="11.5">plugin packages</text>
+  <rect x="24" y="358" width="210" height="36" rx="9" fill="#0f1830" stroke="rgba(120,150,220,.35)"/>
+  <text x="129" y="380" text-anchor="middle" fill="#e6ecf7" font-size="11">plugins/model-router</text>
+  <rect x="24" y="402" width="210" height="36" rx="9" fill="#0f1830" stroke="rgba(120,150,220,.35)"/>
+  <text x="129" y="424" text-anchor="middle" fill="#e6ecf7" font-size="11">plugins/apikey-extract</text>
+  <rect x="24" y="446" width="210" height="36" rx="9" fill="#0f1830" stroke="rgba(120,150,220,.35)" stroke-dasharray="5 4"/>
+  <text x="129" y="468" text-anchor="middle" fill="#e6ecf7" font-size="11">plugins/&lt;your-plugin&gt;</text>
+
+  <!-- init() arrow into registry -->
+  <line x1="244" y1="452" x2="322" y2="452" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <text x="284" y="442" text-anchor="middle" fill="#93a0bd" font-size="10">init()</text>
+  <text x="284" y="470" text-anchor="middle" fill="#66738f" font-size="10">self-register</text>
+
+  <!-- registry -->
+  <rect x="330" y="404" width="172" height="96" rx="12" fill="#0f1830" stroke="rgba(79,140,255,.6)"/>
+  <text x="416" y="430" text-anchor="middle" fill="#e6ecf7" font-size="13" font-weight="600">plugin registry</text>
+  <text x="416" y="450" text-anchor="middle" fill="#93a0bd" font-size="10.5">Register(name, factory)</text>
+  <text x="416" y="468" text-anchor="middle" fill="#66738f" font-size="10">the name is the config key</text>
+  <text x="416" y="486" text-anchor="middle" fill="#66738f" font-size="10">duplicate registration panics</text>
+
+  <!-- registry -> buildchain -->
+  <line x1="506" y1="452" x2="552" y2="452" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <text x="529" y="442" text-anchor="middle" fill="#93a0bd" font-size="10">factories</text>
+
+  <!-- buildchain -->
+  <rect x="558" y="404" width="176" height="96" rx="12" fill="url(#hl)" stroke="rgba(34,211,238,.6)"/>
+  <text x="646" y="430" text-anchor="middle" fill="#22d3ee" font-size="13" font-weight="600">BuildChain</text>
+  <text x="646" y="450" text-anchor="middle" fill="#93a0bd" font-size="10.5">filter enabled</text>
+  <text x="646" y="466" text-anchor="middle" fill="#93a0bd" font-size="10.5">Init(plugin config)</text>
+  <text x="646" y="482" text-anchor="middle" fill="#93a0bd" font-size="10.5">sort stably by order</text>
+
+  <!-- config.yaml card -->
+  <rect x="558" y="536" width="200" height="92" rx="12" fill="#0f1830" stroke="rgba(120,150,220,.4)"/>
+  <text x="658" y="558" text-anchor="middle" fill="#e6ecf7" font-size="12" font-weight="600">config.yaml</text>
+  <text x="658" y="576" text-anchor="middle" fill="#93a0bd" font-size="10">chain.plugins:</text>
+  <text x="658" y="590" text-anchor="middle" fill="#93a0bd" font-size="10">name · enabled</text>
+  <text x="658" y="604" text-anchor="middle" fill="#93a0bd" font-size="10">· order · config</text>
+
+  <!-- config -> buildchain (per-plugin config) -->
+  <line x1="646" y1="532" x2="646" y2="506" stroke="#4f8cff" stroke-width="2" marker-end="url(#arrB)"/>
+  <text x="654" y="522" fill="#66738f" font-size="10">per-plugin config</text>
+
+  <!-- hot reload path: config watch -> swap -->
+  <path d="M 762 584 C 806 584, 830 566, 848 548" fill="none" stroke="#22d3ee" stroke-width="1.8" stroke-dasharray="5 4" marker-end="url(#arrC)"/>
+  <text x="790" y="610" text-anchor="middle" fill="#22d3ee" font-size="10.5">hot reload: gcfg watch → rebuild</text>
+
+  <!-- live chain slot -->
+  <rect x="760" y="356" width="256" height="196" rx="14" fill="rgba(34,211,238,.04)" stroke="rgba(34,211,238,.55)"/>
+  <text x="888" y="378" text-anchor="middle" fill="#e6ecf7" font-size="13" font-weight="600">live chain slot</text>
+  <text x="888" y="394" text-anchor="middle" fill="#93a0bd" font-size="10.5">atomic pointer swap</text>
+
+  <rect x="776" y="404" width="104" height="30" rx="7" fill="#0b1020" stroke="#66738f"/>
+  <text x="828" y="423" text-anchor="middle" fill="#66738f" font-size="10">plugin A</text>
+  <rect x="888" y="404" width="104" height="30" rx="7" fill="#0b1020" stroke="#66738f"/>
+  <text x="940" y="423" text-anchor="middle" fill="#66738f" font-size="10">plugin B</text>
+  <text x="888" y="450" text-anchor="middle" fill="#66738f" font-size="10">old chain — in-flight requests</text>
+
+  <rect x="776" y="464" width="104" height="30" rx="7" fill="#0b1020" stroke="#22d3ee"/>
+  <text x="828" y="483" text-anchor="middle" fill="#e6ecf7" font-size="10">plugin A′</text>
+  <rect x="888" y="464" width="104" height="30" rx="7" fill="#0b1020" stroke="#22d3ee"/>
+  <text x="940" y="483" text-anchor="middle" fill="#e6ecf7" font-size="10">plugin B′</text>
+  <text x="888" y="510" text-anchor="middle" fill="#22d3ee" font-size="10">new chain — new requests</text>
+
+  <!-- buildchain -> slot swap arrow -->
+  <line x1="734" y1="452" x2="754" y2="452" stroke="#22d3ee" stroke-width="2" marker-end="url(#arrC)"/>
+
+  <!-- bottom note -->
+  <text x="520" y="648" text-anchor="middle" fill="#66738f" font-size="11">hot reload never restarts the process: in-flight requests finish on the old chain, new requests immediately use the new one</text>
+</svg>

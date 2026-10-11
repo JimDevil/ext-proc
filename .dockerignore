@@ -1,0 +1,17 @@
+# Build context slimming — everything here is irrelevant to the image build.
+.git
+.gitignore
+docs/
+bin/
+log/
+manifest/deploy/
+*.md
+Dockerfile
+.dockerignore
+Makefile
+__debug_bin*
+/ext-proc
+*.log
+.DS_Store
+.idea/
+.vscode/

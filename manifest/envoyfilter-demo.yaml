@@ -1,0 +1,71 @@
+# Demo EnvoyFilter: injects the ext_proc filter into the higress-cj gateway,
+# pointing at the ext-proc service running on the Mac (OrbStack network
+# 192.168.139.3:50051).
+#
+# Notes:
+#   1. Scope: ALL routes on this gateway (including cj502.test). When the
+#      ext-proc service is down, requests fail with 503 because
+#      failure_mode_allow=false. For long-lived demos set it to true, or
+#      deploy ext-proc in-cluster (see manifest/deploy/deployment.yaml).
+#   2. Remove with: kubectl -n higress-cj delete envoyfilter ext-proc-demo
+apiVersion: networking.istio.io/v1alpha3
+kind: EnvoyFilter
+metadata:
+  name: ext-proc-demo
+  namespace: higress-cj
+spec:
+  workloadSelector:
+    labels:
+      higress: higress-cj-higress-gateway
+  configPatches:
+    # Static cluster added to the data plane, pointing at ext-proc on the Mac
+    # (gRPC requires HTTP/2 explicitly)
+    - applyTo: CLUSTER
+      match:
+        context: GATEWAY
+      patch:
+        operation: ADD
+        value:
+          name: ext-proc-cluster
+          connect_timeout: 2s
+          type: STATIC
+          http2_protocol_options: {}
+          load_assignment:
+            cluster_name: ext-proc-cluster
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: 192.168.139.3
+                          port_value: 50051
+    # Insert the ext_proc HTTP filter before the router
+    - applyTo: HTTP_FILTER
+      match:
+        context: GATEWAY
+        listener:
+          filterChain:
+            filter:
+              name: envoy.filters.network.http_connection_manager
+              subFilter:
+                name: envoy.filters.http.router
+      patch:
+        operation: INSERT_BEFORE
+        value:
+          name: envoy.filters.http.ext_proc
+          typed_config:
+            "@type": type.googleapis.com/envoy.extensions.filters.http.ext_proc.v3.ExternalProcessor
+            stat_prefix: ext_proc_demo
+            grpc_service:
+              envoy_grpc:
+                cluster_name: ext-proc-cluster
+              timeout: 3s
+            processing_mode:
+              request_header_mode: SEND
+              request_body_mode: BUFFERED
+              response_header_mode: SEND
+              response_body_mode: NONE
+            message_timeout: 2s
+            failure_mode_allow: false
+            status_on_error:
+              code: 503

@@ -1,0 +1,114 @@
+# ext-proc configuration
+# Loaded and watched by GoFrame gcfg: editing this file hot-reloads the plugin
+# chain without restarting the process.
+
+app:
+  name: ext-proc
+  version: v0.1.0
+
+logger:
+  # debug / info / warn / error
+  level: debug
+
+server:
+  # ext_proc gRPC listen port (Envoy's grpc_service points here)
+  extProcPort: 50051
+  # Prometheus metrics port (/metrics). 9090 often collides with local proxy
+  # tools on laptops, so the default here is 19090.
+  metricsPort: 19090
+  # gRPC per-process concurrent-stream cap (one goroutine per stream; size it
+  # with memory load tests)
+  maxConcurrentStreams: 1000
+  # Graceful shutdown: propagation delay after marking unready (seconds)
+  unreadyPropagationDelaySeconds: 5
+  # Graceful shutdown: drain window for in-flight streams (seconds); past it
+  # the process force-exits
+  terminationGracePeriodSeconds: 15
+
+chain:
+  # Unified policy for plugin execution failures (the chain-level DEFAULT —
+  # each plugin may override it via plugins[].failurePolicy):
+  #   fail_closed - abort the request (local error response; the status code is
+  #                 decided by Envoy's status_on_error)
+  #   fail_open   - log the error and skip the plugin; the request continues
+  #                 through the rest of the chain
+  failurePolicy: fail_closed
+  plugins:
+    # Model routing: extracts the model from the request body and injects a
+    # routing header (migrated from the higress model-router plugin).
+    # Routing is a nice-to-have: a failure here may fail open, while auth
+    # plugins should keep the chain default (fail_closed).
+    - name: model-router
+      enabled: true
+      order: 10
+      # failurePolicy: fail_open
+      config:
+        # JSON body field path holding the model name (aligned with higress)
+        modelKey: model
+        # The extracted model name is injected into this request header; leave
+        # empty to disable
+        modelToHeader: x-higress-llm-model
+        # For "provider/model" names, the provider part goes into this header;
+        # leave empty to disable
+        addProviderHeader: ""
+        # Together with addProviderHeader: true keeps the original body model
+        # name (with the provider prefix)
+        keepOriginalModelName: false
+        # Only enable for these path suffixes ("*" = all); when omitted the
+        # plugin falls back to the higress default list
+        enableOnPathSuffix:
+          - /chat/completions
+          - /completions
+          - /embeddings
+          - /messages
+        # Auto routing: when the model value is "higress/auto", the target
+        # model is rewritten by regex rules
+        autoRouting:
+          enable: false
+          # Fallback model when no rule matches; leave empty to keep the request
+          defaultModel: ""
+        # pattern is a regex matched against the LAST user message text
+        rules: []
+        # rules:
+        #   - pattern: "(?i)translate|翻译"
+        #     model: provider-a/translate-model
+        # Route-scoped overrides for THIS plugin (higress wasmPlugin matchRules
+        # style): rules evaluated in order, first match wins; rule config
+        # deep-merges over the config above; disable turns the plugin off for
+        # the matched routes.
+        # matchRules:
+        #   - domain: ["api.example.com"]
+        #     pathPrefix: /v1/chat
+        #     config: { modelToHeader: x-model-chat }
+        #   - domain: ["*.internal.corp"]
+        #     disable: true
+
+  # API key extraction: extracts an API key from multiple sources and
+  # injects it into a target header
+    - name: apikey-extract
+      enabled: true
+      order: 20
+      config:
+        # Sources tried in order; the first non-empty hit wins
+        sources:
+          - type: header
+            name: x-api-key
+          - type: header
+            name: authorization
+            # Strip the "Bearer " prefix before taking the value
+            bearer: true
+          - type: query
+            name: apikey
+        # The extracted key is injected into this request header
+        targetHeader: x-extracted-apikey
+        # After a hit, delete the key from the source header (keeps it from
+        # leaking upstream; query sources cannot be deleted)
+        stripSource: false
+        # When no source matches: true rejects (rejectStatus), false passes
+        required: false
+        rejectStatus: 401
+        rejectMessage: "missing api key"
+        # Route-scoped overrides for THIS plugin:
+        # matchRules:
+        #   - pathPrefix: /internal/
+        #     disable: true
