@@ -349,7 +349,15 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		return nil, phase, err
 	}
 
-	s.logger.Debug("Phase processing complete", slog.String("phase", RequestPhaseToString(phase)), slog.String("duration", dur.String()))
+	// Per-phase duration: the aggregate (histogram) is the metrics view, the
+	// debug line (with the stream's request id) is the correlation groundwork
+	// for phase-level tracing.
+	phaseName := RequestPhaseToString(phase)
+	s.metrics.PhaseDurationSeconds.WithLabelValues(phaseName).Observe(dur.Seconds())
+	s.logger.Debug("Phase processing complete",
+		slog.String("phase", phaseName),
+		slog.Duration("duration", dur),
+		slog.String("request_id", rc.RequestID))
 	s.logger.Debug("RequestContext state", slog.Any("context", rc))
 	response, err := rc.GetResponse(phase)
 	return response, phase, err
