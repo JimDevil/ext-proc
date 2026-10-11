@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ext-proc — Envoy ext_proc 责任链插件框架 | Responsibility-chain plugin framework on Envoy ext_proc</title>
-<meta name="description" content="把网关插件从 WASM 迁到进程外：基于 Envoy ext_proc 的责任链插件框架。独立部署、配置热更新、开箱即用的 model-router 与 apikey-extract。| Move gateway plugins out of WASM: a responsibility-chain plugin framework on Envoy ext_proc with hot-reloadable config and two LLM-gateway plugins built in.">
+<title>ext-proc — Envoy ext_proc filter chain 插件框架 | Filter chain plugin framework on Envoy ext_proc</title>
+<meta name="description" content="把网关插件从 WASM 迁到进程外：基于 Envoy ext_proc 的filter chain 插件框架。独立部署、配置热更新、开箱即用的 model-router 与 apikey-extract。| Move gateway plugins out of WASM: a filter chain plugin framework on Envoy ext_proc with hot-reloadable config and two sample LLM-gateway plugins.">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230d1428'/%3E%3Cpath d='M8 11h9M8 16h13M8 21h9' stroke='%2322d3ee' stroke-width='2.6' stroke-linecap='round'/%3E%3Ccircle cx='24' cy='11' r='2.4' fill='%234f8cff'/%3E%3Ccircle cx='24' cy='21' r='2.4' fill='%234f8cff'/%3E%3C/svg%3E">
 <style>
   :root{
@@ -161,14 +161,14 @@
 <header class="wrap">
   <div class="badge"><span class="dot"></span><span data-i18n="hero.badge">开源 · Go 1.26 · Apache-2.0</span></div>
   <h1><span>ext-proc</span></h1>
-  <div class="tagline" data-i18n="hero.tagline">把网关插件从 WASM 迁到进程外 —— 基于 Envoy ext_proc 的责任链插件框架</div>
-  <p class="sub" data-i18n="hero.sub">每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、责任链编排，开箱即用两个 LLM 网关插件。</p>
+  <div class="tagline" data-i18n="hero.tagline">把网关插件从 WASM 迁到进程外 —— 基于 Envoy ext_proc 的filter chain 插件框架</div>
+  <p class="sub" data-i18n="hero.sub">每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、filter chain 编排，开箱即用两个 LLM 网关插件。</p>
   <div class="cta">
     <a class="btn primary" href="#quickstart" data-i18n="hero.cta1">快速开始</a>
     <a class="btn" href="https://github.com/JimDevil/ext-proc" data-i18n="hero.cta2">GitHub 仓库</a>
   </div>
   <div class="stats">
-    <div class="stat"><b>2</b><span data-i18n="stat.plugins">内置插件</span></div>
+    <div class="stat"><b>2</b><span data-i18n="stat.plugins">示例插件</span></div>
     <div class="stat"><b>6</b><span data-i18n="stat.phases">阶段回调</span></div>
     <div class="stat"><b>1</b><span data-i18n="stat.stream">流 / 请求</span></div>
     <div class="stat"><b>0</b><span data-i18n="stat.vm">VM 重建</span></div>
@@ -220,7 +220,7 @@
 <!-- ============ ARCH ============ -->
 <section id="arch">
   <h2 data-i18n="arch.title">架构</h2>
-  <p class="desc" data-i18n="arch.desc">每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给责任链，插件对 headers/body 的修改随响应回传给 Envoy。</p>
+  <p class="desc" data-i18n="arch.desc">每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给 filter chain，插件对 headers/body 的修改随响应回传给 Envoy。</p>
   <div class="arch">
     <svg viewBox="0 0 980 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
       <defs>
@@ -245,7 +245,7 @@
       <!-- ext-proc -->
       <rect x="520" y="60" width="230" height="190" rx="14" fill="url(#hl)" stroke="rgba(34,211,238,.55)"/>
       <text x="635" y="90" text-anchor="middle" fill="#e6ecf7" font-size="15.5" font-weight="700">ext-proc</text>
-      <text x="635" y="110" text-anchor="middle" fill="#93a0bd" font-size="11" data-i18n="svg.chain">责任链（order 升序）</text>
+      <text x="635" y="110" text-anchor="middle" fill="#93a0bd" font-size="11" data-i18n="svg.chain">filter chain（order 升序）</text>
       <rect x="542" y="128" width="186" height="36" rx="8" fill="#0b1020" stroke="rgba(120,150,220,.35)"/>
       <text x="635" y="150" text-anchor="middle" fill="#e6ecf7" font-size="12">model-router</text>
       <rect x="542" y="172" width="186" height="36" rx="8" fill="#0b1020" stroke="rgba(120,150,220,.35)"/>
@@ -268,7 +268,7 @@
     </svg>
   </div>
 
-  <h3 style="text-align:center;font-size:20px;margin:34px 0 8px" data-i18n="arch.chainTitle">责任链与插件</h3>
+  <h3 style="text-align:center;font-size:20px;margin:34px 0 8px" data-i18n="arch.chainTitle">filter chain 与插件</h3>
   <p class="desc" style="margin-bottom:22px" data-i18n="arch.chainDesc">order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，构建成链后原子替换——在途请求走旧链，新请求即时生效。</p>
   <div class="arch" style="padding:10px">
     <img src="assets/chain-architecture.svg" alt="plugin chain architecture — order, short-circuit, atomic hot swap" style="display:block;width:100%;height:auto;border-radius:12px">
@@ -280,9 +280,9 @@
   <h2 data-i18n="feat.title">核心特性</h2>
   <p class="desc" data-i18n="feat.desc">不是又一个 demo：故障语义、优雅退出、指标这些数据面的硬功夫都在框架层做好了，插件只写业务。</p>
   <div class="grid">
-    <div class="card"><div class="ico">⛓️</div><h3 data-i18n="feat.c1t">责任链编排</h3><p data-i18n="feat.c1d">按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。</p></div>
+    <div class="card"><div class="ico">⛓️</div><h3 data-i18n="feat.c1t">filter chain 编排</h3><p data-i18n="feat.c1d">按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。</p></div>
     <div class="card"><div class="ico">🧩</div><h3 data-i18n="feat.c2t">标准化插件接入</h3><p data-i18n="feat.c2d">六阶段回调 + BasePlugin 空实现 + init() 自注册：新增一个插件只需一个包、五步接入、互不影响。</p></div>
-    <div class="card"><div class="ico">🔥</div><h3 data-i18n="feat.c3t">配置热更新</h3><p data-i18n="feat.c3d">GoFrame gcfg watch 配置文件，责任链原子重建；在途请求继续走旧链直至结束，全程零重启。</p></div>
+    <div class="card"><div class="ico">🔥</div><h3 data-i18n="feat.c3t">配置热更新</h3><p data-i18n="feat.c3d">GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链直至结束，全程零重启。</p></div>
     <div class="card"><div class="ico">🛡️</div><h3 data-i18n="feat.c4t">双层容错</h3><p data-i18n="feat.c4d">链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。静默放行必有指标可查、可告警。</p></div>
     <div class="card"><div class="ico">📈</div><h3 data-i18n="feat.c5t">可观测性</h3><p data-i18n="feat.c5d">Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。</p></div>
     <div class="card"><div class="ico">⚙️</div><h3 data-i18n="feat.c6t">生产工程</h3><p data-i18n="feat.c6d">三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。</p></div>
@@ -293,7 +293,7 @@
 
 <!-- ============ PLUGINS ============ -->
 <section id="plugins">
-  <h2 data-i18n="pl.title">内置插件</h2>
+  <h2 data-i18n="pl.title">示例插件</h2>
   <p class="desc" data-i18n="pl.desc">两个从 Higress 生产场景迁移而来的 LLM 网关插件，语义与原 WASM 实现对齐，配置驱动、可单独开关。</p>
   <div class="pgrid">
     <div class="pcard">
@@ -417,10 +417,10 @@ const I18N = {
   zh: {
     "nav.why":"为什么","nav.arch":"架构","nav.feat":"特性","nav.plugins":"插件","nav.qs":"快速开始","nav.dev":"开发指南",
     "hero.badge":"开源 · Go 1.26 · Apache-2.0",
-    "hero.tagline":"把网关插件从 WASM 迁到进程外 —— 基于 Envoy ext_proc 的责任链插件框架",
-    "hero.sub":"每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、责任链编排，开箱即用两个 LLM 网关插件。",
+    "hero.tagline":"把网关插件从 WASM 迁到进程外 —— 基于 Envoy ext_proc 的filter chain 插件框架",
+    "hero.sub":"每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；配置热更新、filter chain 编排，开箱即用两个 LLM 网关插件。",
     "hero.cta1":"快速开始","hero.cta2":"GitHub 仓库",
-    "stat.plugins":"内置插件","stat.phases":"阶段回调","stat.stream":"流 / 请求","stat.vm":"VM 重建",
+    "stat.plugins":"示例插件","stat.phases":"阶段回调","stat.stream":"流 / 请求","stat.vm":"VM 重建",
     "why.title":"为什么离开 WASM",
     "why.desc":"WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合。ext_proc 把插件逻辑放进一个普通进程，代价只是每个处理阶段一次 gRPC 往返。",
     "cmp.h1":"维度","cmp.h2":"WASM 插件","cmp.r1k":"内存与尾延迟",
@@ -429,25 +429,25 @@ const I18N = {
     "cmp.r3k":"语言与调试","cmp.r3w":"TinyGo 限制多，wasm log 黑盒度高","cmp.r3e":"任意 gRPC 语言；标准 k8s 工具链，可观测、可断点调试",
     "cmp.r4k":"部署运维","cmp.r4w":"内嵌 Envoy 进程，随网关一起发布","cmp.r4e":"独立服务：HPA / PDB / 优雅退出 / 灰度发布全部现成",
     "cmp.r5k":"流式处理","cmp.r5w":"HttpBody 逐 chunk 回调，大 body 解析易 panic","cmp.r5e":"FULL_DUPLEX_STREAMED 模式天然适配 LLM SSE 透传",
-    "arch.title":"架构","arch.desc":"每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给责任链，插件对 headers/body 的修改随响应回传给 Envoy。",
+    "arch.title":"架构","arch.desc":"每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给 filter chain，插件对 headers/body 的修改随响应回传给 Envoy。",
     "svg.client":"客户端","svg.envoy":"Envoy 网关","svg.phases":"headers · body · trailers","svg.route":"路由 / 转发",
-    "svg.chain":"责任链（order 升序）","svg.more":"+ 你的插件（init() 自注册）",
+    "svg.chain":"filter chain（order 升序）","svg.more":"+ 你的插件（init() 自注册）",
     "svg.upstream":"上游服务","svg.upstream2":"收到改写后的请求",
     "svg.grpc":"gRPC 双向流","svg.mutation":"mutation 回传","svg.forward":"注入头转发",
     "svg.note":"每请求一条流 · 一流一个 goroutine · 短路（ImmediateResponse）即终止 · fail-open / fail-closed 双层容错",
-    "arch.chainTitle":"责任链与插件",
+    "arch.chainTitle":"filter chain 与插件",
     "arch.chainDesc":"order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，构建成链后原子替换——在途请求走旧链，新请求即时生效。",
     "feat.title":"核心特性",
     "feat.desc":"不是又一个 demo：故障语义、优雅退出、指标这些数据面的硬功夫都在框架层做好了，插件只写业务。",
-    "feat.c1t":"责任链编排","feat.c1d":"按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。",
+    "feat.c1t":"filter chain 编排","feat.c1d":"按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。",
     "feat.c2t":"标准化插件接入","feat.c2d":"六阶段回调 + BasePlugin 空实现 + init() 自注册：新增一个插件只需一个包、五步接入、互不影响。",
-    "feat.c3t":"配置热更新","feat.c3d":"GoFrame gcfg watch 配置文件，责任链原子重建；在途请求继续走旧链，全程零重启。",
+    "feat.c3t":"配置热更新","feat.c3d":"GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链，全程零重启。",
     "feat.c4t":"双层容错","feat.c4d":"链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。静默放行必有指标可查、可告警。",
     "feat.c5t":"可观测性","feat.c5d":"Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。",
     "feat.c6t":"生产工程","feat.c6d":"三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。",
     "feat.c7t":"路由级 matchRules","feat.c7d":"每插件独立持有 matchRules：domain 通配 + path 前缀，首中即停；规则配置深合并覆盖全局，也可按路由关闭单个插件。",
     "feat.c8t":"多架构镜像","feat.c8d":"多阶段 Dockerfile：vendor 离线构建、scratch 运行时、非 root，约 10MB；一条命令构建并推送 amd64 + arm64。",
-    "pl.title":"内置插件","pl.desc":"两个从 Higress 生产场景迁移而来的 LLM 网关插件，语义与原 WASM 实现对齐，配置驱动、可单独开关。",
+    "pl.title":"示例插件","pl.desc":"两个从 Higress 生产场景迁移而来的 LLM 网关插件，语义与原 WASM 实现对齐，配置驱动、可单独开关。",
     "pl.m1tag":"迁移自 higress model-router",
     "pl.m1p":"从请求体提取模型名并注入路由头，是模型路由 / 多 provider 网关的地基插件。",
     "pl.m1l1":"<b>JSON / multipart</b>：gjson 按需提取，不整包解析；multipart 表单字段同样支持",
@@ -478,10 +478,10 @@ const I18N = {
   en: {
     "nav.why":"Why","nav.arch":"Architecture","nav.feat":"Features","nav.plugins":"Plugins","nav.qs":"Quick Start","nav.dev":"Dev Guide",
     "hero.badge":"Open Source · Go 1.26 · Apache-2.0",
-    "hero.tagline":"Move gateway plugins out of WASM — a responsibility-chain plugin framework on Envoy ext_proc",
+    "hero.tagline":"Move gateway plugins out of WASM — a filter chain plugin framework on Envoy ext_proc",
     "hero.sub":"Each plugin is just a Go package behind a standard gRPC service: deploy and scale independently, crashes never take down Envoy. Hot-reloadable config, chain orchestration, and two LLM-gateway plugins out of the box.",
     "hero.cta1":"Get Started","hero.cta2":"GitHub Repository",
-    "stat.plugins":"built-in plugins","stat.phases":"phase callbacks","stat.stream":"stream / request","stat.vm":"VM rebuilds",
+    "stat.plugins":"sample plugins","stat.phases":"phase callbacks","stat.stream":"stream / request","stat.vm":"VM rebuilds",
     "why.title":"Why leave WASM behind",
     "why.desc":"WASM plugins live inside the Envoy process — memory, failures and operations are all coupled. ext_proc moves plugin logic into an ordinary process; the price is one gRPC round-trip per processing phase.",
     "cmp.h1":"Dimension","cmp.h2":"WASM plugins","cmp.r1k":"Memory & tail latency",
@@ -492,7 +492,7 @@ const I18N = {
     "cmp.r5k":"Streaming","cmp.r5w":"Chunked HttpBody callbacks; large bodies are fragile","cmp.r5e":"FULL_DUPLEX_STREAMED mode is a natural fit for LLM SSE passthrough",
     "arch.title":"Architecture","arch.desc":"Every HTTP request owns one bidirectional gRPC stream. Envoy hands the request to the chain at five phases; plugin mutations flow back with the response.",
     "svg.client":"Client","svg.envoy":"Envoy Gateway","svg.phases":"headers · body · trailers","svg.route":"routing / forwarding",
-    "svg.chain":"responsibility chain (by order)","svg.more":"+ your plugin (self-registered in init())",
+    "svg.chain":"filter chain (by order)","svg.more":"+ your plugin (self-registered in init())",
     "svg.upstream":"Upstream","svg.upstream2":"receives the mutated request",
     "svg.grpc":"bidirectional gRPC","svg.mutation":"mutations back","svg.forward":"with headers",
     "svg.note":"One stream per request · one goroutine per stream · ImmediateResponse short-circuits · two-layer fail-open / fail-closed",
@@ -508,7 +508,7 @@ const I18N = {
     "feat.c6t":"Production engineering","feat.c6d":"Three-step graceful drain (unready → propagation delay → bounded stop); MaxRecvMsgSize unlimited — flow control delegated to Envoy backpressure.",
     "feat.c7t":"Route-scoped matchRules","feat.c7d":"Each plugin owns its matchRules — domain wildcards + path prefixes, first match wins; per-route config deep-merges over the global, or disables the plugin for those routes.",
     "feat.c8t":"Multi-arch images","feat.c8d":"Multi-stage Dockerfile (offline vendor build, scratch runtime, non-root, ~10MB); one make target builds & pushes amd64 + arm64.",
-    "pl.title":"Built-in plugins","pl.desc":"Two LLM-gateway plugins migrated from real Higress production scenarios — semantics aligned with the original WASM implementations, config-driven and individually switchable.",
+    "pl.title":"Sample plugins","pl.desc":"Two LLM-gateway plugins migrated from real Higress production scenarios — semantics aligned with the original WASM implementations, config-driven and individually switchable.",
     "pl.m1tag":"migrated from higress model-router",
     "pl.m1p":"Extracts the model name from the request body and injects a routing header — the foundation for model routing and multi-provider gateways.",
     "pl.m1l1":"<b>JSON / multipart</b>: on-demand gjson extraction, no full parse; multipart form fields supported too",
