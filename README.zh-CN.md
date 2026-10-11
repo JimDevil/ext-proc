@@ -37,7 +37,7 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 
 每请求一条流 · 一流一个 goroutine · `ImmediateResponse` 短路即终止 · fail-open / fail-closed 双层容错。
 
-![责任链——order 排序、短路传播、原子热交换](docs/assets/chain-architecture.svg)
+![filter chain——matchRules 按请求组装、插件级 failurePolicy、短路传播、原子热交换](docs/assets/chain-architecture.svg)
 
 ## 核心特性
 

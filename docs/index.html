@@ -259,9 +259,9 @@
   </div>
 
   <h3 style="text-align:center;font-size:20px;margin:34px 0 8px" data-i18n="arch.chainTitle">filter chain 与插件</h3>
-  <p class="desc" style="margin-bottom:22px" data-i18n="arch.chainDesc">order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，构建成链后原子替换——在途请求走旧链，新请求即时生效。</p>
+  <p class="desc" style="margin-bottom:22px" data-i18n="arch.chainDesc">每插件 matchRules 按请求（host+path）组装链，order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，热更新原子替换——在途请求走旧链，新请求即时生效。</p>
   <div class="arch" style="padding:10px">
-    <img src="assets/chain-architecture.svg" alt="plugin chain architecture — order, short-circuit, atomic hot swap" style="display:block;width:100%;height:auto;border-radius:12px">
+    <img src="assets/chain-architecture.svg" alt="plugin chain architecture — matchRules routing, per-plugin failure policy, short-circuit, atomic hot swap" style="display:block;width:100%;height:auto;border-radius:12px">
   </div>
 </section>
 
@@ -424,7 +424,7 @@ const I18N = {
     "svg.grpc":"gRPC 双向流","svg.mutation":"mutation 回传","svg.forward":"注入头转发",
     "svg.note":"每请求一条流 · 一流一个 goroutine · 短路（ImmediateResponse）即终止 · fail-open / fail-closed 双层容错",
     "arch.chainTitle":"filter chain 与插件",
-    "arch.chainDesc":"order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，构建成链后原子替换——在途请求走旧链，新请求即时生效。",
+    "arch.chainDesc":"每插件 matchRules 按请求（host+path）组装链，order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，热更新原子替换——在途请求走旧链，新请求即时生效。",
     "feat.title":"核心特性",
     "feat.desc":"不是又一个 demo：故障语义、优雅退出、指标这些数据面的硬功夫都在框架层做好了，插件只写业务。",
     "feat.c1t":"filter chain 编排","feat.c1d":"按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。",
@@ -483,7 +483,7 @@ const I18N = {
     "svg.grpc":"bidirectional gRPC","svg.mutation":"mutations back","svg.forward":"with headers",
     "svg.note":"One stream per request · one goroutine per stream · ImmediateResponse short-circuits · two-layer fail-open / fail-closed",
     "arch.chainTitle":"The plugin chain",
-    "arch.chainDesc":"order decides position; a short-circuit stops the chain. Plugins plug in from config.yaml and init() self-registration, and the built chain is swapped atomically — in-flight requests finish on the old chain while new requests see the new one immediately.",
+    "arch.chainDesc":"Each plugin's matchRules compose the chain per request (host + path); order decides position and a short-circuit stops the chain. Plugins plug in from config.yaml and init() self-registration, and the route table is swapped atomically on hot reload — in-flight requests finish on the old chain while new requests see the new one immediately.",
     "feat.title":"Core features",
     "feat.desc":"Not another demo: the hard parts of a data plane — failure semantics, graceful drain, metrics — live in the framework. Plugins write business logic only.",
     "feat.c1t":"Chain orchestration","feat.c1d":"Plugins run in configured order; an ImmediateResponse short-circuits the rest. Plugins share nothing but request-scoped state.",

@@ -37,7 +37,7 @@ WASM plugins live inside the Envoy process — memory, failures and operations a
 
 One stream per request · one goroutine per stream · an `ImmediateResponse` short-circuits the chain · two-layer fail-open / fail-closed.
 
-![The plugin chain — order, short-circuit, and atomic hot swap](docs/assets/chain-architecture.svg)
+![The plugin chain — matchRules routing, per-plugin failure policy, short-circuit, and atomic hot swap](docs/assets/chain-architecture.svg)
 
 ## Core features
 
