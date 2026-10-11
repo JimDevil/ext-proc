@@ -61,10 +61,6 @@
   .btn{padding:11px 26px;border-radius:10px;font-size:15px;font-weight:600;border:1px solid var(--line2);color:var(--text)}
   .btn:hover{text-decoration:none;transform:translateY(-1px);border-color:var(--acc2)}
   .btn.primary{background:linear-gradient(92deg,var(--acc1),var(--acc2));color:#06101f;border:0}
-  .stats{display:flex;gap:12px;justify-content:center;flex-wrap:wrap;margin-top:40px}
-  .stat{border:1px solid var(--line);background:var(--panel2);border-radius:12px;padding:10px 22px;text-align:center}
-  .stat b{display:block;font-size:24px;background:linear-gradient(90deg,var(--acc1),var(--acc2));-webkit-background-clip:text;background-clip:text;color:transparent}
-  .stat span{font-size:12.5px;color:var(--muted)}
 
   /* ---- sections ---- */
   section{padding:64px 0}
@@ -166,12 +162,6 @@
   <div class="cta">
     <a class="btn primary" href="#quickstart" data-i18n="hero.cta1">快速开始</a>
     <a class="btn" href="https://github.com/JimDevil/ext-proc" data-i18n="hero.cta2">GitHub 仓库</a>
-  </div>
-  <div class="stats">
-    <div class="stat"><b>2</b><span data-i18n="stat.plugins">示例插件</span></div>
-    <div class="stat"><b>6</b><span data-i18n="stat.phases">阶段回调</span></div>
-    <div class="stat"><b>1</b><span data-i18n="stat.stream">流 / 请求</span></div>
-    <div class="stat"><b>0</b><span data-i18n="stat.vm">VM 重建</span></div>
   </div>
 </header>
 
@@ -287,7 +277,6 @@
     <div class="card"><div class="ico">📈</div><h3 data-i18n="feat.c5t">可观测性</h3><p data-i18n="feat.c5d">Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。</p></div>
     <div class="card"><div class="ico">⚙️</div><h3 data-i18n="feat.c6t">生产工程</h3><p data-i18n="feat.c6d">三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。</p></div>
     <div class="card"><div class="ico">🎯</div><h3 data-i18n="feat.c7t">路由级 matchRules</h3><p data-i18n="feat.c7d">每插件独立持有 matchRules：domain 通配 + path 前缀，首中即停；规则配置深合并覆盖全局，也可按路由关闭单个插件。</p></div>
-    <div class="card"><div class="ico">🐳</div><h3 data-i18n="feat.c8t">多架构镜像</h3><p data-i18n="feat.c8d">多阶段 Dockerfile：vendor 离线构建、scratch 运行时、非 root，约 10MB；一条命令构建并推送 amd64 + arm64。</p></div>
   </div>
 </section>
 
@@ -446,7 +435,6 @@ const I18N = {
     "feat.c5t":"可观测性","feat.c5d":"Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。",
     "feat.c6t":"生产工程","feat.c6d":"三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。",
     "feat.c7t":"路由级 matchRules","feat.c7d":"每插件独立持有 matchRules：domain 通配 + path 前缀，首中即停；规则配置深合并覆盖全局，也可按路由关闭单个插件。",
-    "feat.c8t":"多架构镜像","feat.c8d":"多阶段 Dockerfile：vendor 离线构建、scratch 运行时、非 root，约 10MB；一条命令构建并推送 amd64 + arm64。",
     "pl.title":"示例插件","pl.desc":"两个从 Higress 生产场景迁移而来的 LLM 网关插件，语义与原 WASM 实现对齐，配置驱动、可单独开关。",
     "pl.m1tag":"迁移自 higress model-router",
     "pl.m1p":"从请求体提取模型名并注入路由头，是模型路由 / 多 provider 网关的地基插件。",
@@ -507,7 +495,6 @@ const I18N = {
     "feat.c5t":"Observability","feat.c5d":"Prometheus metrics (streams, phase errors, duration histograms) + gRPC health checks + structured slog logging; per-phase latency available in Envoy access logs.",
     "feat.c6t":"Production engineering","feat.c6d":"Three-step graceful drain (unready → propagation delay → bounded stop); MaxRecvMsgSize unlimited — flow control delegated to Envoy backpressure.",
     "feat.c7t":"Route-scoped matchRules","feat.c7d":"Each plugin owns its matchRules — domain wildcards + path prefixes, first match wins; per-route config deep-merges over the global, or disables the plugin for those routes.",
-    "feat.c8t":"Multi-arch images","feat.c8d":"Multi-stage Dockerfile (offline vendor build, scratch runtime, non-root, ~10MB); one make target builds & pushes amd64 + arm64.",
     "pl.title":"Sample plugins","pl.desc":"Two LLM-gateway plugins migrated from real Higress production scenarios — semantics aligned with the original WASM implementations, config-driven and individually switchable.",
     "pl.m1tag":"migrated from higress model-router",
     "pl.m1p":"Extracts the model name from the request body and injects a routing header — the foundation for model routing and multi-provider gateways.",
