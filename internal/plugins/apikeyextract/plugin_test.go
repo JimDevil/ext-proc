@@ -205,3 +205,91 @@ func TestApiKeyExtractRejectBodyIsValidJSON(t *testing.T) {
 		t.Fatalf("rejection body must be valid JSON: %v", err)
 	}
 }
+
+func TestConfiguredSourcesReplaceDefaults(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{
+		"sources": []any{
+			map[string]any{"type": "header", "name": "x-custom-key"},
+		},
+	})
+	ctx := plugintest.NewMockContext()
+	h := hdrs(map[string]string{
+		":path":        fakePath(""),
+		testHdrAPIKey:  fakeKey("default-source"),
+		"x-custom-key": fakeKey("configured-source"),
+	})
+	if err := p.OnRequestHeaders(ctx, h); err != nil {
+		t.Fatalf("OnRequestHeaders failed: %v", err)
+	}
+	got, ok := ctx.LastHeaderValue("x-extracted-apikey")
+	if !ok || got != fakeKey("configured-source") {
+		t.Fatalf("configured source must win over the defaults: got (%q,%v)", got, ok)
+	}
+}
+
+func TestConfiguredSourcesEmptyIsAnError(t *testing.T) {
+	t.Parallel()
+
+	p := New()
+	err := p.Init(gjson.New(map[string]any{"sources": []any{}}), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err == nil {
+		t.Fatal("an explicitly empty sources list must fail validation")
+	}
+}
+
+func TestInvalidSourceConfigFailsFast(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  map[string]any
+	}{
+		{"unknown type", map[string]any{"sources": []any{map[string]any{"type": "cookie", "name": "k"}}}},
+		{"empty name", map[string]any{"sources": []any{map[string]any{"type": "header"}}}},
+		{"bearer on query", map[string]any{"sources": []any{map[string]any{"type": "query", "name": "k", "bearer": true}}}},
+		{"invalid target header", map[string]any{"targetHeader": ":authority"}},
+		{"invalid reject status", map[string]any{"rejectStatus": 999}},
+		{"strip removes target", map[string]any{
+			"targetHeader": "x-key",
+			"stripSource":  true,
+			"sources":      []any{map[string]any{"type": "header", "name": "x-key"}},
+		}},
+		{"strip a protected header", map[string]any{
+			"stripSource": true,
+			"sources":     []any{map[string]any{"type": "header", "name": "host"}},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := New()
+			if err := p.Init(gjson.New(tt.cfg), slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+				t.Fatal("expected config validation to fail")
+			}
+		})
+	}
+}
+
+func TestInvalidKeyValuesAreNeverInjected(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{
+		"sources":  []any{map[string]any{"type": "query", "name": testQueryName}},
+		"required": true,
+	})
+	ctx := plugintest.NewMockContext()
+	// url.ParseQuery decodes %0A into a newline; injecting it would be a
+	// header-smuggling primitive. It must be skipped and required mode must
+	// reject the request instead.
+	if err := p.OnRequestHeaders(ctx, hdrs(map[string]string{":path": fakePath(testQueryName + "=bad%0Avalue")})); err != nil {
+		t.Fatalf("OnRequestHeaders failed: %v", err)
+	}
+	if _, ok := ctx.LastHeaderValue("x-extracted-apikey"); ok {
+		t.Fatal("an invalid key value must not be injected")
+	}
+	if status, aborted := ctx.CancelStatus(); !aborted || status != 401 {
+		t.Fatalf("required mode should reject after skipping the invalid value: (%d,%v)", status, aborted)
+	}
+}

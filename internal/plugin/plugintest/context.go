@@ -4,6 +4,8 @@
 package plugintest
 
 import (
+	"context"
+
 	extproc "github.com/JimDevil/ext-proc/sdk"
 
 	"github.com/JimDevil/ext-proc/internal/plugin"
@@ -28,12 +30,41 @@ type MockContext struct {
 	cancelStatus  int32
 	cancelBody    string
 	cancelHeaders map[string]extproc.HeaderValue
+	ctx           context.Context
+	requestInfo   plugin.RequestInfo
+
+	routeCacheCleared bool
+	checkpoint        mockCheckpoint
+	hasCheckpoint     bool
+}
+
+// mockCheckpoint is the opaque snapshot used by BeginPlugin/RollbackPlugin.
+type mockCheckpoint struct {
+	ops               []HeaderOp
+	body              []byte
+	bodySet           bool
+	values            map[string]any
+	eos               bool
+	aborted           bool
+	cancelStatus      int32
+	cancelBody        string
+	cancelHeaders     map[string]extproc.HeaderValue
+	routeCacheCleared bool
 }
 
 // NewMockContext builds an empty mock context.
 func NewMockContext() *MockContext {
-	return &MockContext{values: map[string]any{}}
+	return &MockContext{values: map[string]any{}, ctx: context.Background()}
 }
+
+// WithContext sets the stream context returned by Context (chainable).
+func (m *MockContext) WithContext(ctx context.Context) *MockContext {
+	m.ctx = ctx
+	return m
+}
+
+// RouteCacheCleared reports whether ClearRouteCache was called.
+func (m *MockContext) RouteCacheCleared() bool { return m.routeCacheCleared }
 
 // WithEndOfStream sets the EndOfStream return value (chainable).
 func (m *MockContext) WithEndOfStream(v bool) *MockContext {
@@ -128,6 +159,64 @@ func (m *MockContext) GetValue(name string) (any, bool) {
 }
 
 func (m *MockContext) Aborted() bool { return m.aborted }
+
+// WithRequestInfo sets the metadata returned by RequestInfo (chainable).
+func (m *MockContext) WithRequestInfo(info plugin.RequestInfo) *MockContext {
+	m.requestInfo = info
+	return m
+}
+
+func (m *MockContext) RequestInfo() plugin.RequestInfo { return m.requestInfo }
+
+func (m *MockContext) Context() context.Context {
+	if m.ctx == nil {
+		return context.Background()
+	}
+	return m.ctx
+}
+
+func (m *MockContext) ClearRouteCache() { m.routeCacheCleared = true }
+
+func (m *MockContext) BeginPlugin() {
+	values := make(map[string]any, len(m.values))
+	for k, v := range m.values {
+		values[k] = v
+	}
+	m.checkpoint = mockCheckpoint{
+		ops:               append([]HeaderOp(nil), m.ops...),
+		body:              append([]byte(nil), m.body...),
+		bodySet:           m.bodySet,
+		values:            values,
+		eos:               m.eos,
+		aborted:           m.aborted,
+		cancelStatus:      m.cancelStatus,
+		cancelBody:        m.cancelBody,
+		cancelHeaders:     m.cancelHeaders,
+		routeCacheCleared: m.routeCacheCleared,
+	}
+	m.hasCheckpoint = true
+}
+
+func (m *MockContext) RollbackPlugin() {
+	if !m.hasCheckpoint {
+		return
+	}
+	c := m.checkpoint
+	m.ops = append([]HeaderOp(nil), c.ops...)
+	m.body = append([]byte(nil), c.body...)
+	m.bodySet = c.bodySet
+	m.values = make(map[string]any, len(c.values))
+	for k, v := range c.values {
+		m.values[k] = v
+	}
+	m.eos = c.eos
+	m.aborted = c.aborted
+	m.cancelStatus = c.cancelStatus
+	m.cancelBody = c.cancelBody
+	m.cancelHeaders = c.cancelHeaders
+	m.routeCacheCleared = c.routeCacheCleared
+	m.hasCheckpoint = false
+}
 
 // Compile-time check that the mock implements the narrow plugin interface.
 var _ plugin.Context = (*MockContext)(nil)

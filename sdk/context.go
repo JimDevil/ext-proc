@@ -14,10 +14,10 @@
 package extproc
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -70,8 +70,6 @@ func RequestPhaseToString(phase int) string {
 	}
 }
 
-const kContentLength = "content-length"
-
 // PhaseResponse is the per-phase response being accumulated:
 // header/body mutations collect incrementally; an immediateResponse, once set,
 // short-circuits the request.
@@ -115,8 +113,14 @@ func (hv HeaderValue) ToEnvoyHeaderValue(name string) *corev3.HeaderValue {
 // ToEnvoyHeaderValueOption converts to a header action item; action must be a
 // corev3.HeaderValueOption_HeaderAppendAction enum name.
 func (hv HeaderValue) ToEnvoyHeaderValueOption(name string, action string) (*corev3.HeaderValueOption, error) {
+	if err := validateMutableHeaderName(name); err != nil {
+		return nil, err
+	}
 	if !hv.IsValid() {
 		return nil, fmt.Errorf("invalid header value for %s", name)
+	}
+	if err := ValidateHeaderValue(headerValueBytes(hv)); err != nil {
+		return nil, fmt.Errorf("invalid value for header %s: %w", name, err)
 	}
 	v, ok := corev3.HeaderValueOption_HeaderAppendAction_value[action]
 	if !ok {
@@ -126,6 +130,14 @@ func (hv HeaderValue) ToEnvoyHeaderValueOption(name string, action string) (*cor
 		Header:       hv.ToEnvoyHeaderValue(name),
 		AppendAction: corev3.HeaderValueOption_HeaderAppendAction(v),
 	}, nil
+}
+
+// headerValueBytes returns the bytes that will be written for hv.
+func headerValueBytes(hv HeaderValue) []byte {
+	if hv.RawValue != nil {
+		return hv.RawValue
+	}
+	return []byte(hv.Value)
 }
 
 // BuildHeaderValuesFromMap is a convenience constructor: map -> HeaderValues.
@@ -150,6 +162,8 @@ type RequestContext struct {
 	Path      string
 	FullPath  string
 	RequestID string
+	TraceID   string
+	SpanID    string
 
 	AllHeaders AllHeaders
 
@@ -157,6 +171,7 @@ type RequestContext struct {
 	Duration    time.Duration
 	EndOfStream bool
 	data        map[string]any
+	ctx         context.Context
 
 	phase    int
 	response PhaseResponse
@@ -167,6 +182,31 @@ type RequestContext struct {
 func newRequestContext() *RequestContext {
 	return &RequestContext{
 		data: make(map[string]any), // cross-phase shared data
+		ctx:  context.Background(),
+		response: PhaseResponse{
+			headerMutation: &extprocv3.HeaderMutation{},
+		},
+	}
+}
+
+// NewRequestContext builds an empty request context. It is primarily useful
+// for tests and for SDK users that drive the context directly; the production
+// stream loop allocates it internally.
+func NewRequestContext() *RequestContext { return newRequestContext() }
+
+// Context returns the stream context. It is canceled when Envoy cancels the
+// stream (including its message timeout), so plugin callouts should use it.
+func (rc *RequestContext) Context() context.Context {
+	if rc == nil || rc.ctx == nil {
+		return context.Background()
+	}
+	return rc.ctx
+}
+
+// setContext is called once by the stream loop before any phase runs.
+func (rc *RequestContext) setContext(ctx context.Context) {
+	if ctx != nil {
+		rc.ctx = ctx
 	}
 }
 
@@ -214,6 +254,12 @@ func initReqCtx(rc *RequestContext, headers *corev3.HeaderMap) error {
 		case "x-request-id":
 			rc.RequestID = eitherValue(h)
 
+		case "traceparent":
+			if traceID, spanID, ok := parseTraceparent(eitherValue(h)); ok {
+				rc.TraceID = traceID
+				rc.SpanID = spanID
+			}
+
 		default:
 		}
 	}
@@ -232,6 +278,9 @@ func (rc *RequestContext) GetValue(name string) (any, error) {
 
 // SetValue writes cross-phase shared state.
 func (rc *RequestContext) SetValue(name string, val any) error {
+	if rc.data == nil {
+		rc.data = make(map[string]any)
+	}
 	rc.data[name] = val
 	return nil
 }
@@ -273,7 +322,7 @@ func (rc *RequestContext) ContinueRequest() error {
 	}
 
 	rc.response.continueRequest = &extprocv3.CommonResponse{
-		HeaderMutation:  rc.response.headerMutation,
+		HeaderMutation:  rc.ensureHeaderMutation(),
 		BodyMutation:    rc.response.bodyMutation,
 		ClearRouteCache: rc.response.clearRouteCache,
 	}
@@ -286,6 +335,9 @@ func (rc *RequestContext) ContinueRequest() error {
 // ImmediateResponse.Headers. Note: the protocol has no immediate response in
 // the trailers phases.
 func (rc *RequestContext) CancelRequest(status int32, headers map[string]HeaderValue, body string) error {
+	if err := ValidateStatus(status); err != nil {
+		return err
+	}
 	if err := rc.AppendHeaders(headers); err != nil {
 		return err
 	}
@@ -294,7 +346,7 @@ func (rc *RequestContext) CancelRequest(status int32, headers map[string]HeaderV
 		Status: &typev3.HttpStatus{
 			Code: typev3.StatusCode(status),
 		},
-		Headers: rc.response.headerMutation,
+		Headers: rc.ensureHeaderMutation(),
 		Body:    []byte(body),
 	}
 	return nil
@@ -360,7 +412,7 @@ func (rc *RequestContext) GetResponse(phase int) (*extprocv3.ProcessingResponse,
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_RequestTrailers{
 				RequestTrailers: &extprocv3.TrailersResponse{
-					HeaderMutation: rc.response.headerMutation,
+					HeaderMutation: rc.ensureHeaderMutation(),
 				},
 			},
 		}, nil
@@ -387,7 +439,7 @@ func (rc *RequestContext) GetResponse(phase int) (*extprocv3.ProcessingResponse,
 		return &extprocv3.ProcessingResponse{
 			Response: &extprocv3.ProcessingResponse_ResponseTrailers{
 				ResponseTrailers: &extprocv3.TrailersResponse{
-					HeaderMutation: rc.response.headerMutation,
+					HeaderMutation: rc.ensureHeaderMutation(),
 				},
 			},
 		}, nil
@@ -460,9 +512,80 @@ func (rc *RequestContext) EmptyContinueResponse(phase int) (*extprocv3.Processin
 	}
 }
 
+// PhaseSnapshot captures the mutation and request-scoped state of the current
+// phase. It is used by the responsibility chain to roll back a plugin that
+// failed under the fail_open policy, so that its partial header/body changes
+// and shared values never reach Envoy or later plugins. The fields are
+// intentionally unexported: callers treat it as opaque state.
+type PhaseSnapshot struct {
+	headerMutation    *extprocv3.HeaderMutation
+	bodyMutation      *extprocv3.BodyMutation
+	continueRequest   *extprocv3.CommonResponse
+	immediateResponse *extprocv3.ImmediateResponse
+	clearRouteCache   bool
+	data              map[string]any
+}
+
+// SnapshotPhase captures the current phase mutations for later rollback.
+func (rc *RequestContext) SnapshotPhase() PhaseSnapshot {
+	return PhaseSnapshot{
+		headerMutation:    cloneHeaderMutation(rc.response.headerMutation),
+		bodyMutation:      rc.response.bodyMutation,
+		continueRequest:   rc.response.continueRequest,
+		immediateResponse: rc.response.immediateResponse,
+		clearRouteCache:   rc.response.clearRouteCache,
+		data:              cloneData(rc.data),
+	}
+}
+
+// RestorePhase rolls the current phase mutations back to a snapshot.
+func (rc *RequestContext) RestorePhase(snapshot PhaseSnapshot) {
+	rc.response.headerMutation = cloneHeaderMutation(snapshot.headerMutation)
+	rc.response.bodyMutation = snapshot.bodyMutation
+	rc.response.continueRequest = snapshot.continueRequest
+	rc.response.immediateResponse = snapshot.immediateResponse
+	rc.response.clearRouteCache = snapshot.clearRouteCache
+	rc.data = cloneData(snapshot.data)
+}
+
+func cloneData(in map[string]any) map[string]any {
+	if in == nil {
+		return make(map[string]any)
+	}
+	out := make(map[string]any, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
+}
+
+// cloneHeaderMutation copies the header mutation slices. The option values are
+// immutable once appended (plugins only append through the RequestContext
+// API), so a shallow copy of the slice is sufficient.
+func cloneHeaderMutation(in *extprocv3.HeaderMutation) *extprocv3.HeaderMutation {
+	if in == nil {
+		return &extprocv3.HeaderMutation{}
+	}
+	return &extprocv3.HeaderMutation{
+		SetHeaders:    slices.Clone(in.SetHeaders),
+		RemoveHeaders: slices.Clone(in.RemoveHeaders),
+	}
+}
+
+// ensureHeaderMutation returns a non-nil header mutation accumulator.
+func (rc *RequestContext) ensureHeaderMutation() *extprocv3.HeaderMutation {
+	if rc.response.headerMutation == nil {
+		rc.response.headerMutation = &extprocv3.HeaderMutation{}
+	}
+	return rc.response.headerMutation
+}
+
 // UpdateHeader appends one header action with an explicit write action.
 func (rc *RequestContext) UpdateHeader(name string, hv HeaderValue, action string) error {
-	hm := rc.response.headerMutation
+	if err := validateMutableHeaderName(name); err != nil {
+		return err
+	}
+	hm := rc.ensureHeaderMutation()
 	ho, err := hv.ToEnvoyHeaderValueOption(name, action)
 	if err != nil {
 		return err
@@ -490,13 +613,17 @@ func (rc *RequestContext) OverwriteHeader(name string, hv HeaderValue) error {
 func (rc *RequestContext) UpdateHeaders(headers map[string]HeaderValue, action string) error {
 	hos := make([]*corev3.HeaderValueOption, 0, len(headers))
 	for n, hv := range headers {
+		if err := validateMutableHeaderName(n); err != nil {
+			return err
+		}
 		ho, err := hv.ToEnvoyHeaderValueOption(n, action)
 		if err != nil {
 			return err
 		}
 		hos = append(hos, ho)
 	}
-	rc.response.headerMutation.SetHeaders = append(rc.response.headerMutation.SetHeaders, hos...)
+	hm := rc.ensureHeaderMutation()
+	hm.SetHeaders = append(hm.SetHeaders, hos...)
 	return nil
 }
 
@@ -514,7 +641,10 @@ func (rc *RequestContext) OverwriteHeaders(headers map[string]HeaderValue) error
 
 // RemoveHeader removes a header (deduplicated).
 func (rc *RequestContext) RemoveHeader(name string) error {
-	hm := rc.response.headerMutation
+	if err := validateMutableHeaderName(name); err != nil {
+		return err
+	}
+	hm := rc.ensureHeaderMutation()
 	if !slices.Contains(hm.RemoveHeaders, name) {
 		hm.RemoveHeaders = append(hm.RemoveHeaders, name)
 	}
@@ -522,7 +652,12 @@ func (rc *RequestContext) RemoveHeader(name string) error {
 }
 
 func (rc *RequestContext) RemoveHeaders(headers []string) error {
-	hm := rc.response.headerMutation
+	for _, h := range headers {
+		if err := validateMutableHeaderName(h); err != nil {
+			return err
+		}
+	}
+	hm := rc.ensureHeaderMutation()
 	for _, h := range headers {
 		if !slices.Contains(hm.RemoveHeaders, h) {
 			hm.RemoveHeaders = append(hm.RemoveHeaders, h)
@@ -532,7 +667,12 @@ func (rc *RequestContext) RemoveHeaders(headers []string) error {
 }
 
 func (rc *RequestContext) RemoveHeadersVariadic(headers ...string) error {
-	hm := rc.response.headerMutation
+	for _, h := range headers {
+		if err := validateMutableHeaderName(h); err != nil {
+			return err
+		}
+	}
+	hm := rc.ensureHeaderMutation()
 	for _, h := range headers {
 		if !slices.Contains(hm.RemoveHeaders, h) {
 			hm.RemoveHeaders = append(hm.RemoveHeaders, h)
@@ -563,20 +703,14 @@ func (rc *RequestContext) ReplaceBodyChunk(body []byte) error {
 	return nil
 }
 
-// ReplaceBody replaces the whole body and updates Content-Length to match.
+// ReplaceBody replaces the whole body.
 //
 // Only correct when the filter is configured BUFFERED, so that a single body
-// message carries the entire body. Under STREAMED use ReplaceBodyChunk. Note
-// too that a chunked HTTP/1.1 message carries no Content-Length at all, so the
-// header written here is meaningless in that case.
+// message carries the entire body. Under STREAMED use ReplaceBodyChunk. The
+// Content-Length header is deliberately left alone: Envoy recalculates it when
+// a filter mutates the body, and a single streamed chunk is not the full body.
 func (rc *RequestContext) ReplaceBody(body []byte) error {
-	if err := rc.ReplaceBodyChunk(body); err != nil {
-		return err
-	}
-	if len(body) == 0 {
-		return nil
-	}
-	return rc.OverwriteHeader(kContentLength, HeaderValue{RawValue: []byte(strconv.Itoa(len(body)))})
+	return rc.ReplaceBodyChunk(body)
 }
 
 // ClearBodyChunk removes the body bytes of the current message, leaving
@@ -590,11 +724,8 @@ func (rc *RequestContext) ClearBodyChunk() error {
 	return nil
 }
 
-// ClearBody removes the body and sets Content-Length to 0. See ReplaceBody on
-// when this is the right call.
+// ClearBody removes the body. Content-Length is left to Envoy, matching
+// ReplaceBody.
 func (rc *RequestContext) ClearBody() error {
-	if err := rc.ClearBodyChunk(); err != nil {
-		return err
-	}
-	return rc.OverwriteHeader(kContentLength, HeaderValue{RawValue: []byte(strconv.Itoa(0))})
+	return rc.ClearBodyChunk()
 }

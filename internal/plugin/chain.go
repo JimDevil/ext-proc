@@ -1,7 +1,9 @@
 package plugin
 
 import (
+	"fmt"
 	"log/slog"
+	"time"
 
 	extproc "github.com/JimDevil/ext-proc/sdk"
 	"github.com/gogf/gf/v2/errors/gerror"
@@ -21,8 +23,9 @@ type pluginEntry struct {
 // internal/processor) — so the Chain and its plugin instances are read-only at
 // runtime and need no locking.
 type Chain struct {
-	entries []pluginEntry
-	logger  *slog.Logger
+	entries  []pluginEntry
+	logger   *slog.Logger
+	observer Observer
 }
 
 // Names returns the plugin names on the chain (in execution order), for logs
@@ -35,26 +38,32 @@ func (c *Chain) Names() []string {
 	return names
 }
 
-// ClosePlugins closes plugins one by one on graceful shutdown. Only called on
-// the process-exit path (SDK Close callback); hot reload does NOT call it (the
-// old chain is discarded — see the Plugin.Close contract).
-func (c *Chain) ClosePlugins() {
-	for _, e := range c.entries {
-		if err := e.plugin.Close(); err != nil {
-			c.logger.Error("failed to close plugin", slog.String("plugin", e.plugin.Name()), slog.String("error", err.Error()))
-		}
-	}
-}
-
 // runPhase executes the chain in order:
-//   - a plugin error is handled by THAT plugin's failure policy: fail_open
-//     logs and skips, fail_closed aborts (returns the error);
+//   - every plugin runs inside a panic guard; a panic is converted to an error
+//     and handled by THAT plugin's failure policy instead of escaping to the
+//     SDK layer;
+//   - fail_open rolls back the mutations written by the failed plugin, logs,
+//     and skips it; fail_closed aborts (returns the error);
 //   - the first plugin that short-circuits (CancelRequest) stops the rest.
 func (c *Chain) runPhase(phase string, ctx Context, invoke func(Plugin) error) error {
 	for _, e := range c.entries {
-		if err := invoke(e.plugin); err != nil {
+		ctx.BeginPlugin()
+		started := time.Now()
+		err, panicked := c.runPlugin(e, phase, invoke)
+		if c.observer != nil {
+			c.observer.ObservePlugin(PluginResult{
+				Plugin:   e.plugin.Name(),
+				Phase:    phase,
+				Duration: time.Since(started),
+				Err:      err,
+				FailOpen: e.failOpen,
+				Panicked: panicked,
+			})
+		}
+		if err != nil {
 			if e.failOpen {
-				c.logger.Error("plugin failed, skipping per the fail_open policy",
+				ctx.RollbackPlugin()
+				c.logger.Error("plugin failed, rolling back and skipping per the fail_open policy",
 					slog.String("phase", phase),
 					slog.String("plugin", e.plugin.Name()),
 					slog.String("error", err.Error()))
@@ -69,6 +78,19 @@ func (c *Chain) runPhase(phase string, ctx Context, invoke func(Plugin) error) e
 		}
 	}
 	return nil
+}
+
+// runPlugin invokes one plugin and converts a panic into an error. The panic
+// is recovered at the plugin boundary so one plugin's bug cannot bypass the
+// chain's failure policy.
+func (c *Chain) runPlugin(e pluginEntry, phase string, invoke func(Plugin) error) (err error, panicked bool) {
+	defer func() {
+		if r := recover(); r != nil {
+			panicked = true
+			err = fmt.Errorf("plugin %s panicked in phase %s: %v", e.plugin.Name(), phase, r)
+		}
+	}()
+	return invoke(e.plugin), false
 }
 
 // RunRequestHeaders runs the request-headers phase (pseudo headers :path/:method

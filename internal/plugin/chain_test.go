@@ -1,9 +1,11 @@
 package plugin
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"testing"
 
 	extproc "github.com/JimDevil/ext-proc/sdk"
@@ -12,12 +14,31 @@ import (
 
 var testLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
+func boolPtr(v bool) *bool { return &v }
+
+// registerTestPlugin registers a test plugin and removes it afterwards so the
+// package tests are repeatable with -count=2.
+func registerTestPlugin(t *testing.T, name string, factory Factory) {
+	t.Helper()
+	t.Cleanup(func() {
+		registryMu.Lock()
+		delete(registry, name)
+		registryMu.Unlock()
+	})
+	Register(name, factory)
+}
+
 // fakeContext is an in-memory Context for this package's tests (it avoids
 // importing plugintest, which would create an import cycle).
 type fakeContext struct {
 	values  map[string]any
 	aborted bool
 	status  int32
+
+	checkpoint    map[string]any
+	checkpointSet bool
+	cpAborted     bool
+	cpStatus      int32
 }
 
 func newFakeContext() *fakeContext { return &fakeContext{values: map[string]any{}} }
@@ -44,6 +65,35 @@ func (f *fakeContext) GetValue(name string) (any, bool) {
 	return v, ok
 }
 func (f *fakeContext) Aborted() bool { return f.aborted }
+
+func (f *fakeContext) Context() context.Context { return context.Background() }
+
+func (f *fakeContext) RequestInfo() RequestInfo { return RequestInfo{} }
+
+func (f *fakeContext) ClearRouteCache() {}
+
+func (f *fakeContext) BeginPlugin() {
+	f.checkpoint = make(map[string]any, len(f.values))
+	for k, v := range f.values {
+		f.checkpoint[k] = v
+	}
+	f.cpAborted = f.aborted
+	f.cpStatus = f.status
+	f.checkpointSet = true
+}
+
+func (f *fakeContext) RollbackPlugin() {
+	if !f.checkpointSet {
+		return
+	}
+	f.values = make(map[string]any, len(f.checkpoint))
+	for k, v := range f.checkpoint {
+		f.values[k] = v
+	}
+	f.aborted = f.cpAborted
+	f.status = f.cpStatus
+	f.checkpointSet = false
+}
 
 var _ Context = (*fakeContext)(nil)
 
@@ -170,123 +220,92 @@ func TestChainFailClosedReturnsError(t *testing.T) {
 	}
 }
 
-// TestPluginFailurePolicyOverride 验证插件级 failurePolicy 覆盖链级默认：
-// 链级 fail_closed 下，显式声明 fail_open 的插件报错时被跳过（请求继续），
-// 未覆盖的插件报错仍上抛（fail_closed 生效）。
+// TestPluginFailurePolicyOverride verifies that a plugin-level policy wins
+// over the chain default: under fail_closed, an explicitly fail_open plugin is
+// skipped while an uncovered failure still escalates.
 func TestPluginFailurePolicyOverride(t *testing.T) {
 	t.Parallel()
 
 	var seq []string
-	Register("fp-open", func() Plugin {
+	registerTestPlugin(t, "fp-open", func() Plugin {
 		return &stubPlugin{name: "fp-open", seq: &seq, onRequestHeaders: func(Context, extproc.AllHeaders) error {
 			return errors.New("fp-open boom")
 		}}
 	})
-	Register("fp-closed", func() Plugin {
+	registerTestPlugin(t, "fp-closed", func() Plugin {
 		return &stubPlugin{name: "fp-closed", seq: &seq, onRequestHeaders: func(Context, extproc.AllHeaders) error {
 			return errors.New("fp-closed boom")
 		}}
 	})
-	Register("fp-ok", func() Plugin { return &stubPlugin{name: "fp-ok", seq: &seq} })
+	registerTestPlugin(t, "fp-ok", func() Plugin { return &stubPlugin{name: "fp-ok", seq: &seq} })
 
-	// 场景1：链 fail_closed，fp-open 显式 fail_open → 跳过继续，fp-ok 正常执行
+	compose := func(cfg ChainConfig) *Chain {
+		t.Helper()
+		table, err := BuildRouteTable(cfg, nil, testLogger)
+		if err != nil {
+			t.Fatalf("BuildRouteTable failed: %v", err)
+		}
+		return table.Compose("any.test", "/")
+	}
+
 	cfg := ChainConfig{
 		FailurePolicy: "fail_closed",
 		Plugins: []PluginConfig{
-			{Name: "fp-open", Enabled: true, Order: 10, FailurePolicy: "fail_open"},
-			{Name: "fp-ok", Enabled: true, Order: 20},
+			{Name: "fp-open", Enabled: boolPtr(true), Order: 10, FailurePolicy: "fail_open"},
+			{Name: "fp-ok", Enabled: boolPtr(true), Order: 20},
 		},
 	}
-	c, err := BuildChain(cfg, nil, testLogger)
-	if err != nil {
-		t.Fatalf("BuildChain failed: %v", err)
-	}
-	ctx := newFakeContext()
-	if err := c.RunRequestHeaders(ctx, extproc.AllHeaders{}); err != nil {
-		t.Fatalf("插件级 fail_open 应消化错误: %v", err)
+	if err := compose(cfg).RunRequestHeaders(newFakeContext(), extproc.AllHeaders{}); err != nil {
+		t.Fatalf("a plugin-level fail_open must absorb the error: %v", err)
 	}
 	if len(seq) != 2 {
-		t.Fatalf("插件级 fail_open 后续插件应执行: %v", seq)
+		t.Fatalf("the plugin after a fail_open plugin must run: %v", seq)
 	}
 
-	// 场景2：链 fail_closed，fp-closed 未覆盖 → 错误上抛
 	cfg2 := ChainConfig{
 		FailurePolicy: "fail_closed",
 		Plugins: []PluginConfig{
-			{Name: "fp-closed", Enabled: true, Order: 10},
-			{Name: "fp-ok", Enabled: true, Order: 20},
+			{Name: "fp-closed", Enabled: boolPtr(true), Order: 10},
+			{Name: "fp-ok", Enabled: boolPtr(true), Order: 20},
 		},
 	}
-	c2, err := BuildChain(cfg2, nil, testLogger)
-	if err != nil {
-		t.Fatalf("BuildChain failed: %v", err)
-	}
-	ctx2 := newFakeContext()
-	if err := c2.RunRequestHeaders(ctx2, extproc.AllHeaders{}); err == nil {
-		t.Fatal("未覆盖的插件错误应按链级 fail_closed 上抛")
+	if err := compose(cfg2).RunRequestHeaders(newFakeContext(), extproc.AllHeaders{}); err == nil {
+		t.Fatal("an uncovered error must follow the chain-level fail_closed policy")
 	}
 }
 
-// TestInvalidFailurePolicy 验证非法的 failurePolicy 值在构建期 fail fast。
+// TestInvalidFailurePolicy verifies that invalid failure policies fail fast at
+// build time, including the chain-level value.
 func TestInvalidFailurePolicy(t *testing.T) {
 	t.Parallel()
 
-	Register("fp-bogus", func() Plugin { return &stubPlugin{name: "fp-bogus", seq: &[]string{}} })
+	registerTestPlugin(t, "fp-bogus", func() Plugin { return &stubPlugin{name: "fp-bogus", seq: &[]string{}} })
 
-	// 插件级非法值
 	cfg := ChainConfig{
 		FailurePolicy: "fail_closed",
-		Plugins:       []PluginConfig{{Name: "fp-bogus", Enabled: true, Order: 10, FailurePolicy: "bogus"}},
+		Plugins:       []PluginConfig{{Name: "fp-bogus", Enabled: boolPtr(true), Order: 10, FailurePolicy: "bogus"}},
 	}
-	if _, err := BuildChain(cfg, nil, testLogger); err == nil {
-		t.Fatal("插件级非法 failurePolicy 应报错")
+	if _, err := BuildRouteTable(cfg, nil, testLogger); err == nil {
+		t.Fatal("an invalid plugin-level failurePolicy must fail the build")
 	}
 
-	// 链级非法值（插件未覆盖时暴露）
 	cfgChain := ChainConfig{
 		FailurePolicy: "bogus",
-		Plugins:       []PluginConfig{{Name: "fp-bogus", Enabled: true, Order: 10}},
+		Plugins:       []PluginConfig{{Name: "fp-bogus", Enabled: boolPtr(true), Order: 10}},
 	}
-	if _, err := BuildChain(cfgChain, nil, testLogger); err == nil {
-		t.Fatal("链级非法 failurePolicy 应报错")
+	if _, err := BuildRouteTable(cfgChain, nil, testLogger); err == nil {
+		t.Fatal("an invalid chain-level failurePolicy must fail the build")
 	}
 }
 
-func TestBuildChain(t *testing.T) {
+// TestBuildRouteTableInitFailure verifies that a plugin Init error propagates.
+func TestBuildRouteTableInitFailure(t *testing.T) {
 	t.Parallel()
 
-	Register("build-a", func() Plugin { return &stubPlugin{name: "build-a", seq: &[]string{}} })
-	Register("build-b", func() Plugin { return &stubPlugin{name: "build-b", seq: &[]string{}} })
-	Register("build-init-err", func() Plugin { return &initErrPlugin{} })
-
-	cfg := ChainConfig{
-		FailurePolicy: "fail_open",
-		Plugins: []PluginConfig{
-			{Name: "build-b", Enabled: true, Order: 10},
-			{Name: "build-disabled", Enabled: false, Order: 5},
-			{Name: "build-a", Enabled: true, Order: 20},
-		},
-	}
-
-	c, err := BuildChain(cfg, nil, testLogger)
-	if err != nil {
-		t.Fatalf("failed to build the chain: %v", err)
-	}
-	// Disabled plugins are filtered; order decides position (b=10 before a=20).
-	if names := c.Names(); len(names) != 2 || names[0] != "build-b" || names[1] != "build-a" {
-		t.Fatalf("chain orchestration mismatch: %v", names)
-	}
-
-	// An unregistered plugin errors out.
-	_, err = BuildChain(ChainConfig{Plugins: []PluginConfig{{Name: "no-such", Enabled: true}}}, nil, testLogger)
-	if err == nil {
-		t.Fatal("an unregistered plugin should error")
-	}
-
-	// A plugin Init failure propagates.
-	_, err = BuildChain(ChainConfig{Plugins: []PluginConfig{{Name: "build-init-err", Enabled: true}}}, nil, testLogger)
-	if err == nil {
-		t.Fatal("a plugin Init failure should propagate")
+	registerTestPlugin(t, "build-init-err", func() Plugin { return &initErrPlugin{} })
+	cfg := ChainConfig{Plugins: []PluginConfig{{Name: "build-init-err", Enabled: boolPtr(true)}}}
+	if _, err := BuildRouteTable(cfg, nil, testLogger); err == nil {
+		t.Fatal("a plugin Init failure must propagate")
 	}
 }
 
@@ -301,31 +320,80 @@ func (p *initErrPlugin) Init(*gjson.Json, *slog.Logger) error {
 	return errors.New("init failed")
 }
 
-func TestPluginConfigNode(t *testing.T) {
+func TestChainFailOpenRollsBackPanic(t *testing.T) {
 	t.Parallel()
 
-	tree := gjson.New(map[string]any{
-		"chain": map[string]any{
-			"plugins": []any{
-				map[string]any{"name": "p1", "enabled": true, "order": 10, "config": map[string]any{"k": "v1"}},
-				map[string]any{"name": "p2", "enabled": true, "order": 20},
-			},
-		},
-	})
+	var seq []string
+	boom := &stubPlugin{name: "boom", seq: &seq, onRequestHeaders: func(ctx Context, _ extproc.AllHeaders) error {
+		if err := ctx.SetValue("leak", "yes"); err != nil {
+			return err
+		}
+		if err := ctx.CancelRequest(403, nil, "partial"); err != nil {
+			return err
+		}
+		panic("boom")
+	}}
+	after := &stubPlugin{name: "after", seq: &seq, onRequestHeaders: func(ctx Context, _ extproc.AllHeaders) error {
+		if _, ok := ctx.GetValue("leak"); ok {
+			t.Error("fail_open must roll back the failed plugin's state")
+		}
+		if ctx.Aborted() {
+			t.Error("fail_open must roll back the failed plugin's short-circuit")
+		}
+		return nil
+	}}
 
-	if node := pluginConfigNode(tree, 0); node == nil || node.Get("k").String() != "v1" {
-		t.Fatalf("expected p1's config node: %v", node)
+	c := newChain(true, boom, after)
+	ctx := newFakeContext()
+	if err := c.RunRequestHeaders(ctx, extproc.AllHeaders{}); err != nil {
+		t.Fatalf("fail_open must absorb the panic: %v", err)
 	}
-	if node := pluginConfigNode(tree, 1); node != nil {
-		t.Fatalf("a plugin without a config section should yield nil: %v", node)
+	if len(seq) != 2 {
+		t.Fatalf("the chain must continue after a recovered panic: %v", seq)
 	}
-	if node := pluginConfigNode(tree, 99); node != nil {
-		t.Fatalf("an out-of-range index should yield nil: %v", node)
+	if ctx.Aborted() {
+		t.Fatal("the rolled-back short-circuit must not survive")
 	}
-	if node := pluginConfigNode(nil, 0); node != nil {
-		t.Fatalf("an empty config tree should yield nil: %v", node)
+}
+
+func TestChainFailClosedRecoversPanicAsError(t *testing.T) {
+	t.Parallel()
+
+	var seq []string
+	boom := &stubPlugin{name: "boom", seq: &seq, onRequestHeaders: func(Context, extproc.AllHeaders) error {
+		panic("boom")
+	}}
+	c := newChain(false, boom, &stubPlugin{name: "after", seq: &seq})
+	err := c.RunRequestHeaders(newFakeContext(), extproc.AllHeaders{})
+	if err == nil || !strings.Contains(err.Error(), "panicked") {
+		t.Fatalf("fail_closed must surface the panic as a regular plugin error: %v", err)
 	}
-	if node := pluginConfigNodeByName(tree, "p1"); node == nil || node.Get("k").String() != "v1" {
-		t.Fatalf("lookup by name should find p1's config node: %v", node)
+	if len(seq) != 1 {
+		t.Fatalf("plugins after the failed one must not run: %v", seq)
+	}
+}
+
+func TestChainFailOpenRollsBackPartialMutations(t *testing.T) {
+	t.Parallel()
+
+	var seq []string
+	partial := &stubPlugin{name: "partial", seq: &seq, onRequestHeaders: func(ctx Context, _ extproc.AllHeaders) error {
+		if err := ctx.SetValue("partial", "yes"); err != nil {
+			return err
+		}
+		return errors.New("boom")
+	}}
+	after := &stubPlugin{name: "after", seq: &seq, onRequestHeaders: func(ctx Context, _ extproc.AllHeaders) error {
+		if _, ok := ctx.GetValue("partial"); ok {
+			t.Error("fail_open must roll back partial mutations")
+		}
+		return nil
+	}}
+	c := newChain(true, partial, after)
+	if err := c.RunRequestHeaders(newFakeContext(), extproc.AllHeaders{}); err != nil {
+		t.Fatalf("fail_open must absorb the error: %v", err)
+	}
+	if len(seq) != 2 {
+		t.Fatalf("the chain must continue after a rolled-back plugin: %v", seq)
 	}
 }

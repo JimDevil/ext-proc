@@ -15,3 +15,8 @@ __debug_bin*
 .DS_Store
 .idea/
 .vscode/
+
+.github/
+coverage.out
+
+test/

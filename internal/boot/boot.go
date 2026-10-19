@@ -1,4 +1,4 @@
-// Package boot wires up startup: config -> logger -> plugin chain.
+// Package boot wires up startup: config -> logger -> plugin chain -> watcher.
 // One Init function per step, with gerror chaining the failure cause.
 package boot
 
@@ -21,6 +21,10 @@ func Init(ctx context.Context) error {
 
 	if err := InitChain(ctx); err != nil {
 		return gerror.Wrap(err, "Init chain error")
+	}
+
+	if err := InitWatch(ctx); err != nil {
+		return gerror.Wrap(err, "Init watch error")
 	}
 
 	return nil

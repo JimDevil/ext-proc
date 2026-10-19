@@ -37,6 +37,7 @@ import (
 const (
 	sharedEnabledKey     = "modelrouter.enabled"
 	sharedContentTypeKey = "modelrouter.content-type"
+	sharedStreamedKey    = "modelrouter.streamed"
 )
 
 // ModelRouter is the model-routing plugin. Plugin instances are rebuilt whole
@@ -58,6 +59,9 @@ func (m *ModelRouter) Name() string { return "model-router" }
 
 // Init implements plugin.Plugin: parses the plugin-private config.
 func (m *ModelRouter) Init(cfg *gfjson.Json, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	c, err := parseConfig(cfg, logger)
 	if err != nil {
 		return err
@@ -85,9 +89,13 @@ func (m *ModelRouter) OnRequestHeaders(ctx plugin.Context, headers extproc.AllHe
 		}
 	}
 
-	_ = ctx.SetValue(sharedEnabledKey, enabled)
+	if err := ctx.SetValue(sharedEnabledKey, enabled); err != nil {
+		return gerror.Wrap(err, "failed to cache the path gate")
+	}
 	if ct, ok := headers.Get("content-type"); ok {
-		_ = ctx.SetValue(sharedContentTypeKey, ct)
+		if err := ctx.SetValue(sharedContentTypeKey, ct); err != nil {
+			return gerror.Wrap(err, "failed to cache the content type")
+		}
 	}
 	return nil
 }
@@ -101,8 +109,26 @@ func (m *ModelRouter) OnRequestBody(ctx plugin.Context, body []byte) error {
 		return nil
 	}
 
+	// Model extraction needs the complete body. Under Envoy's STREAMED body
+	// mode a single chunk is not a complete JSON/multipart document. Remember
+	// that a partial chunk was seen and skip the final chunk too, instead of
+	// rewriting a body that Envoy has already forwarded in pieces.
+	if !ctx.EndOfStream() {
+		if err := ctx.SetValue(sharedStreamedKey, true); err != nil {
+			return gerror.Wrap(err, "failed to record a streamed body chunk")
+		}
+		return nil
+	}
+	if streamed, ok := ctx.GetValue(sharedStreamedKey); ok {
+		if v, isBool := streamed.(bool); isBool && v {
+			m.logger.Debug("model-router requires a buffered body; skipping a streamed request")
+			return nil
+		}
+	}
+
 	ct, _ := ctx.GetValue(sharedContentTypeKey)
 	ctStr, _ := ct.(string)
+	ctStr = strings.ToLower(strings.TrimSpace(ctStr))
 
 	switch {
 	case strings.Contains(ctStr, "application/json"):
@@ -117,12 +143,21 @@ func (m *ModelRouter) OnRequestBody(ctx plugin.Context, body []byte) error {
 // handleJsonBody).
 func (m *ModelRouter) handleJSONBody(ctx plugin.Context, body []byte) error {
 	if !json.Valid(body) {
-		m.logger.Error("request body is not valid JSON, skipping")
+		// Client-controlled malformed input is not a server error; logging it
+		// at Error would allow trivial log amplification.
+		m.logger.Debug("request body is not valid JSON, skipping")
 		return nil
 	}
 
 	model := gjson.GetBytes(body, m.config.modelKey).String()
 	if model == "" {
+		return nil
+	}
+	// The model is attacker-controlled: never write a value containing CR/LF
+	// or another control character into a header. Envoy would reject the
+	// mutation, and it would be a header-smuggling primitive otherwise.
+	if err := extproc.ValidateHeaderValue([]byte(model)); err != nil {
+		m.logger.Warn("ignoring an invalid model value", slog.String("error", err.Error()))
 		return nil
 	}
 
@@ -131,15 +166,16 @@ func (m *ModelRouter) handleJSONBody(ctx plugin.Context, body []byte) error {
 	if m.config.enableAutoRouting && model == autoModelPrefix {
 		target := m.resolveAutoModel(body)
 		if target == "" {
-			m.logger.Warn("auto routing matched no rule and defaultModel is empty; keeping the request as-is")
+			m.logger.Debug("auto routing matched no rule and defaultModel is empty; keeping the request as-is")
 			return nil
 		}
-		header := m.config.modelToHeader
-		if header == "" {
-			header = defaultModelHeader
-		}
-		if err := ctx.OverwriteHeader(header, extproc.HeaderValue{Value: target}); err != nil {
-			return gerror.Wrap(err, "failed to inject the auto-routing model header")
+		// modelToHeader empty means "do not inject a header" (the body is
+		// still rewritten below); this matches the regular branch.
+		if m.config.modelToHeader != "" {
+			if err := ctx.OverwriteHeader(m.config.modelToHeader, extproc.HeaderValue{Value: target}); err != nil {
+				return gerror.Wrap(err, "failed to inject the auto-routing model header")
+			}
+			ctx.ClearRouteCache()
 		}
 		newBody, err := sjson.SetBytes(body, m.config.modelKey, target)
 		if err != nil {
@@ -154,6 +190,7 @@ func (m *ModelRouter) handleJSONBody(ctx plugin.Context, body []byte) error {
 		if err := ctx.OverwriteHeader(m.config.modelToHeader, extproc.HeaderValue{Value: model}); err != nil {
 			return gerror.Wrap(err, "failed to inject the model routing header")
 		}
+		ctx.ClearRouteCache()
 	}
 
 	// provider/model prefix split.
@@ -166,6 +203,7 @@ func (m *ModelRouter) handleJSONBody(ctx plugin.Context, body []byte) error {
 		if err := ctx.OverwriteHeader(m.config.addProviderHeader, extproc.HeaderValue{Value: provider}); err != nil {
 			return gerror.Wrap(err, "failed to inject the provider header")
 		}
+		ctx.ClearRouteCache()
 		if !m.config.keepOriginalModelName {
 			newBody, err := sjson.SetBytes(body, m.config.modelKey, rest)
 			if err != nil {
@@ -258,17 +296,28 @@ func (m *ModelRouter) handleMultipartBody(ctx plugin.Context, body []byte, conte
 
 		if part.FormName() == m.config.modelKey {
 			model := string(content)
+			if err := extproc.ValidateHeaderValue([]byte(model)); err != nil {
+				m.logger.Warn("ignoring an invalid multipart model value", slog.String("error", err.Error()))
+				if err := writePart(writer, part.Header, model); err != nil {
+					return err
+				}
+				continue
+			}
 			if m.config.modelToHeader != "" {
 				if err := ctx.OverwriteHeader(m.config.modelToHeader, extproc.HeaderValue{Value: model}); err != nil {
 					return gerror.Wrap(err, "failed to inject the model routing header")
 				}
+				ctx.ClearRouteCache()
 			}
 			if m.config.addProviderHeader != "" {
 				provider, rest, found := strings.Cut(model, "/")
 				if found {
-					if err := ctx.OverwriteHeader(m.config.addProviderHeader, extproc.HeaderValue{Value: provider}); err != nil {
+					if err := extproc.ValidateHeaderValue([]byte(provider)); err != nil {
+						m.logger.Warn("ignoring an invalid multipart provider value", slog.String("error", err.Error()))
+					} else if err := ctx.OverwriteHeader(m.config.addProviderHeader, extproc.HeaderValue{Value: provider}); err != nil {
 						return gerror.Wrap(err, "failed to inject the provider header")
 					}
+					ctx.ClearRouteCache()
 					if !m.config.keepOriginalModelName {
 						// Rewrite this part's model value (other parts pass through).
 						if err := writePart(writer, part.Header, rest); err != nil {

@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/test/bufconn"
 )
 
-// panicProcessor 在请求头阶段 panic 的测试桩：用于验证 SDK 的 panic 防护
+// panicProcessor panics in the request-headers phase to exercise SDK panic recovery.
 type panicProcessor struct {
 	opts *ProcessingOptions
 }
@@ -23,7 +23,7 @@ type panicProcessor struct {
 func (p *panicProcessor) GetName() string                { return "panic-test" }
 func (p *panicProcessor) GetOptions() *ProcessingOptions { return p.opts }
 func (p *panicProcessor) ProcessRequestHeaders(*RequestContext, AllHeaders) error {
-	panic("boom: 模拟插件 panic")
+	panic("boom: simulated plugin panic")
 }
 func (p *panicProcessor) ProcessRequestBody(*RequestContext, []byte) error          { return nil }
 func (p *panicProcessor) ProcessRequestTrailers(*RequestContext, AllHeaders) error  { return nil }
@@ -35,7 +35,7 @@ func (p *panicProcessor) Close(int32) error                                     
 
 var testSdkLogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 
-// startBufconnServer 用 bufconn 起一个进程内的 ext_proc gRPC 服务
+// startBufconnServer starts an in-process ext_proc gRPC service over bufconn.
 func startBufconnServer(t *testing.T, opts *ProcessingOptions) *grpc.ClientConn {
 	t.Helper()
 	lis := bufconn.Listen(1024 * 1024)
@@ -59,7 +59,7 @@ func startBufconnServer(t *testing.T, opts *ProcessingOptions) *grpc.ClientConn 
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
 	if err != nil {
-		t.Fatalf("建立连接失败: %v", err)
+		t.Fatalf("failed to create the client connection: %v", err)
 	}
 	t.Cleanup(func() { _ = conn.Close() })
 	return conn
@@ -72,7 +72,7 @@ func sendRequestHeaders(t *testing.T, conn *grpc.ClientConn) {
 
 	stream, err := epb.NewExternalProcessorClient(conn).Process(ctx)
 	if err != nil {
-		t.Fatalf("打开流失败: %v", err)
+		t.Fatalf("failed to open the stream: %v", err)
 	}
 	_ = stream.Send(&epb.ProcessingRequest{
 		Request: &epb.ProcessingRequest_RequestHeaders{
@@ -84,21 +84,23 @@ func sendRequestHeaders(t *testing.T, conn *grpc.ClientConn) {
 			},
 		},
 	})
-	// 读取响应：fail-open 期望拿到空 continue；fail-closed 期望流报错——两者都证明进程没有崩
+	// Read the response: fail-open yields an empty continue, fail-closed ends the stream with an error. Both prove the process survived.
 	if _, err = stream.Recv(); err != nil && err != io.EOF {
-		t.Logf("fail-closed 路径：流按预期报错: %v", err)
+		t.Logf("fail-closed path: stream failed as expected: %v", err)
 	}
 	_ = stream.CloseSend()
 }
 
 func TestPanicRecoveryFailOpen(t *testing.T) {
-	// AbortOnProcessorFailure=false：panic 被吞掉，客户端收到空 continue
-	conn := startBufconnServer(t, NewDefaultProcessingOptions())
+	// AbortOnProcessorFailure=false: the panic is swallowed and the client receives an empty continue.
+	opts := NewDefaultProcessingOptions()
+	opts.AbortOnProcessorFailure = false
+	conn := startBufconnServer(t, opts)
 	sendRequestHeaders(t, conn)
 }
 
 func TestPanicRecoveryFailClosed(t *testing.T) {
-	// AbortOnProcessorFailure=true：panic 上抛，流以 gRPC 错误终结
+	// AbortOnProcessorFailure=true: the panic escalates and the stream ends with a gRPC error.
 	opts := NewDefaultProcessingOptions()
 	opts.AbortOnProcessorFailure = true
 	conn := startBufconnServer(t, opts)

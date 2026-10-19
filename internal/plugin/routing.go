@@ -17,8 +17,8 @@ import (
 // swaps it whole, so request-time composition is plain slice scans with no
 // locking.
 type RouteTable struct {
-	failOpen bool
 	logger   *slog.Logger
+	observer Observer
 	slots    []pluginSlot
 }
 
@@ -70,14 +70,14 @@ func (t *RouteTable) GlobalChain() *Chain {
 			entries = append(entries, pluginEntry{plugin: s.global, failOpen: s.failOpen})
 		}
 	}
-	return &Chain{entries: entries, logger: t.logger}
+	return &Chain{entries: entries, logger: t.logger, observer: t.observer}
 }
 
 // Compose assembles the per-request chain: every slot resolves its own
 // variant (first matching rule wins, fallback to the global instance) and
 // contributes its instance — or is skipped when the matching rule disabled
-// the plugin for those routes. The result is an immutable Chain; its
-// failOpen/logger come from the table.
+// the plugin for those routes. The result is an immutable Chain; each entry
+// carries its own resolved failure policy.
 func (t *RouteTable) Compose(authority, path string) *Chain {
 	host := strings.ToLower(stripPort(authority))
 	entries := make([]pluginEntry, 0, len(t.slots))
@@ -86,7 +86,7 @@ func (t *RouteTable) Compose(authority, path string) *Chain {
 			entries = append(entries, pluginEntry{plugin: inst, failOpen: slot.failOpen})
 		}
 	}
-	return &Chain{entries: entries, logger: t.logger}
+	return &Chain{entries: entries, logger: t.logger, observer: t.observer}
 }
 
 // resolve picks this slot's instance for a request: the first matching rule
@@ -108,17 +108,26 @@ func (s *pluginSlot) resolve(host, path string) (Plugin, bool) {
 }
 
 // CloseAll closes every plugin instance on the table (global + all variants).
-// Disable-marker variants carry no instance and are skipped. Only for process
-// exit (hot reload discards old generations WITHOUT Close — see
-// plugin.Plugin.Close).
+// Disable-marker variants carry no instance and are skipped. Called by the
+// processor when a hot-reload generation retires and its last stream ends, or
+// on process shutdown. Plugin.Close must be idempotent.
 func (t *RouteTable) CloseAll() {
+	logCloseError := func(name string, err error) {
+		if t.logger != nil {
+			t.logger.Error("failed to close plugin", slog.String("plugin", name), slog.String("error", err.Error()))
+		}
+	}
 	for _, s := range t.slots {
 		if s.global != nil {
-			_ = s.global.Close()
+			if err := s.global.Close(); err != nil {
+				logCloseError(s.global.Name(), err)
+			}
 		}
 		for _, v := range s.variants {
 			if v.plugin != nil {
-				_ = v.plugin.Close()
+				if err := v.plugin.Close(); err != nil {
+					logCloseError(v.plugin.Name(), err)
+				}
 			}
 		}
 	}
@@ -131,16 +140,27 @@ func (t *RouteTable) CloseAll() {
 // disable marker instead). Instances are per variant on purpose — different
 // routes may run the same plugin with different configs simultaneously.
 // Slots are sorted stably by order (ascending; equal orders keep the
-// config-file order) — the same chain-position contract as buildOneChain.
-func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*RouteTable, error) {
+// config-file order). An optional observer receives per-plugin metrics for
+// every composed chain.
+func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger, observers ...Observer) (*RouteTable, error) {
+	if logger == nil {
+		return nil, gerror.New("cannot build a plugin route table without a logger")
+	}
+	if _, err := resolveFailOpen("", cfg.FailurePolicy, "chain"); err != nil {
+		return nil, err
+	}
+	var observer Observer
+	if len(observers) > 0 {
+		observer = observers[0]
+	}
 	t := &RouteTable{
-		failOpen: cfg.FailurePolicy == "fail_open",
 		logger:   logger,
+		observer: observer,
 	}
 
 	for i, pc := range cfg.Plugins {
-		if !pc.Enabled {
-			logger.Info("plugin disabled, skipping", slog.String("plugin", pc.Name))
+		if !pc.IsEnabled() {
+			logger.Debug("plugin disabled, skipping", slog.String("plugin", pc.Name))
 			continue
 		}
 		f, err := mustLookup(pc.Name)
@@ -153,7 +173,8 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 			return nil, err
 		}
 
-		global, err := buildInstance(f, pluginConfigNode(tree, i), pc.Name, logger)
+		globalNode := pluginConfigNode(tree, i)
+		global, err := buildInstance(f, globalNode, pc.Name, logger)
 		if err != nil {
 			return nil, gerror.Wrapf(err, "plugin %s failed to initialize", pc.Name)
 		}
@@ -166,7 +187,7 @@ func BuildRouteTable(cfg ChainConfig, tree *gjson.Json, logger *slog.Logger) (*R
 				})
 				continue
 			}
-			merged := mergedConfigNode(pluginConfigNode(tree, i), ruleConfigNode(tree, i, j))
+			merged := mergedConfigNode(globalNode, ruleConfigNode(tree, i, j))
 			inst, err := buildInstance(f, merged, pc.Name, logger)
 			if err != nil {
 				return nil, gerror.Wrapf(err, "plugin %s matchRule #%d failed to initialize", pc.Name, j)

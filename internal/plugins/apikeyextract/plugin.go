@@ -42,6 +42,9 @@ func (a *ApiKeyExtract) Name() string { return "apikey-extract" }
 
 // Init implements plugin.Plugin: parses the plugin-private config.
 func (a *ApiKeyExtract) Init(cfg *gfjson.Json, logger *slog.Logger) error {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	c, err := parseConfig(cfg, logger)
 	if err != nil {
 		return err
@@ -109,6 +112,13 @@ func (a *ApiKeyExtract) extract(headers extproc.AllHeaders) (string, sourceConfi
 				if v == "" {
 					continue
 				}
+			}
+			// Query parameters are percent-decoded and come from the client;
+			// never write control characters into a header.
+			if err := extproc.ValidateHeaderValue([]byte(v)); err != nil {
+				a.logger.Debug("skipping an API key candidate with an invalid header value",
+					slog.String("sourceType", s.sourceType), slog.String("source", s.name))
+				continue
 			}
 			a.logger.Debug("extracted API key",
 				slog.String("sourceType", s.sourceType), slog.String("source", s.name))

@@ -10,3 +10,6 @@ log/
 .DS_Store
 .idea/
 .vscode/
+
+# 测试覆盖率产物
+coverage.out

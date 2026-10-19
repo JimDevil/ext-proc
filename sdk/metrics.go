@@ -25,6 +25,11 @@ type Metrics struct {
 	BodyBytesReceived     prometheus.Counter
 	BodyBytesReturned     prometheus.Counter
 	ResponseSendErrors    prometheus.Counter
+	// PluginDuration is the per-plugin, per-phase execution latency.
+	PluginDuration *prometheus.HistogramVec
+	// PluginFailures counts plugin errors and panics. policy is fail_open or
+	// fail_closed (the policy that handled the failure).
+	PluginFailures *prometheus.CounterVec
 }
 
 func NewEmptyMetrics() *Metrics {
@@ -37,7 +42,7 @@ func NewEmptyMetrics() *Metrics {
 		),
 		ErroredStreams: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_errored_streams",
+				Name: "extproc_errored_streams_total",
 				Help: "Total number of streams that errored, counted once per stream.",
 			},
 		),
@@ -52,25 +57,28 @@ func NewEmptyMetrics() *Metrics {
 		PanicRecoveries: prometheus.NewCounter(
 			prometheus.CounterOpts{
 				Name: "extproc_panic_recoveries_total",
-				Help: "Total number of processor panics recovered by the SDK.",
+				Help: "Total number of processor or plugin panics recovered by the framework.",
 			},
 		),
 		TotalStreams: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_total_streams",
+				Name: "extproc_streams_total",
 				Help: "Total number of streams processed.",
 			},
 		),
 		StreamDurationSeconds: prometheus.NewHistogram(
 			prometheus.HistogramOpts{
 				Name:                        "extproc_stream_duration_seconds",
-				Help:                        "Stream duration in seconds (native histogram).",
+				Help:                        "Stream duration in seconds (native and classic histograms).",
 				NativeHistogramBucketFactor: 1.1, // O(10%) resolution at any scale
+				// Classic buckets keep the metric usable with text/OpenMetrics
+				// scrapes; a native-only histogram exposes just +Inf there.
+				Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 			},
 		),
 		TotalRequestHeaders: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_total_request_headers",
+				Name: "extproc_request_headers_total",
 				Help: "Total number of request headers processed.",
 			},
 		),
@@ -82,13 +90,13 @@ func NewEmptyMetrics() *Metrics {
 		),
 		TotalRequestTrailers: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_total_request_trailers",
+				Name: "extproc_request_trailers_total",
 				Help: "Total number of request trailers processed.",
 			},
 		),
 		TotalResponseHeaders: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_total_response_headers",
+				Name: "extproc_response_headers_total",
 				Help: "Total number of response headers processed.",
 			},
 		),
@@ -100,13 +108,13 @@ func NewEmptyMetrics() *Metrics {
 		),
 		TotalResponseTrailers: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_total_response_trailers",
+				Name: "extproc_response_trailers_total",
 				Help: "Total number of response trailers processed.",
 			},
 		),
 		TotalEmptyResponses: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_empty_responses",
+				Name: "extproc_empty_responses_total",
 				Help: "Total number of empty responses processed.",
 			},
 		),
@@ -124,9 +132,24 @@ func NewEmptyMetrics() *Metrics {
 		),
 		ResponseSendErrors: prometheus.NewCounter(
 			prometheus.CounterOpts{
-				Name: "extproc_response_send_errors",
+				Name: "extproc_response_send_errors_total",
 				Help: "Total number of response send errors.",
 			},
+		),
+		PluginDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "extproc_plugin_duration_seconds",
+				Help:    "Plugin execution duration in seconds, labeled by plugin and phase.",
+				Buckets: []float64{0.0001, 0.00025, 0.0005, 0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5},
+			},
+			[]string{"plugin", "phase"},
+		),
+		PluginFailures: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "extproc_plugin_failures_total",
+				Help: "Total number of plugin failures, labeled by plugin, phase and handling policy.",
+			},
+			[]string{"plugin", "phase", "policy"},
 		),
 	}
 }
@@ -136,11 +159,20 @@ func (m *Metrics) Collectors() []prometheus.Collector {
 	v := reflect.ValueOf(m).Elem()
 	cs := make([]prometheus.Collector, 0, v.NumField())
 	for i := 0; i < v.NumField(); i++ {
+		field := v.Field(i)
 		// Interface() panics on unexported fields
-		if !v.Field(i).CanInterface() {
+		if !field.CanInterface() {
 			continue
 		}
-		if c, ok := v.Field(i).Interface().(prometheus.Collector); ok && c != nil {
+		// Skip typed nil pointers/interfaces: they satisfy the Collector type
+		// assertion but would panic inside MustRegister.
+		switch field.Kind() {
+		case reflect.Ptr, reflect.Interface:
+			if field.IsNil() {
+				continue
+			}
+		}
+		if c, ok := field.Interface().(prometheus.Collector); ok {
 			cs = append(cs, c)
 		}
 	}

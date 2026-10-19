@@ -1,0 +1,51 @@
+# Example strategic-merge patch that adds ext-proc as a sidecar to an existing
+# gateway Deployment. Apply with kustomize or:
+#   kubectl -n <gateway-ns> patch deployment <gateway> --patch-file deployment-patch.yaml
+#
+# The Envoy cluster must point at 127.0.0.1:50051 (h2c) and the ConfigMap must
+# contain the sidecar/config.yaml profile.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: replace-with-gateway-deployment
+spec:
+  template:
+    spec:
+      containers:
+        - name: ext-proc
+          image: ghcr.io/JimDevil/ext-proc:v0.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - name: ext-proc-grpc
+              containerPort: 50051
+            - name: ext-proc-metrics
+              containerPort: 19090
+          readinessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              memory: 512Mi
+          volumeMounts:
+            - name: ext-proc-config
+              mountPath: /app/manifest/config
+              readOnly: true
+      volumes:
+        - name: ext-proc-config
+          configMap:
+            name: ext-proc-sidecar-config

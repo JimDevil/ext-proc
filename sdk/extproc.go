@@ -74,6 +74,11 @@ func (s *GenericExtProcServer) Process(srv extprocv3.ExternalProcessor_ProcessSe
 
 	rc := newRequestContext()
 	ctx := srv.Context()
+	rc.setContext(ctx)
+	if lifecycle, ok := s.processor.(StreamLifecycle); ok {
+		lifecycle.StreamStart(rc)
+		defer lifecycle.StreamEnd(rc)
+	}
 
 	// A stream is counted as errored at most once; PhaseErrors carries the
 	// per-phase detail.
@@ -155,7 +160,7 @@ func (s *GenericExtProcServer) Process(srv extprocv3.ExternalProcessor_ProcessSe
 			}
 		}
 
-		s.logger.Debug("Sending ProcessingResponse", slog.String("phase", phaseName), slog.Any("response", resp))
+		s.logPhase(rc, phaseName)
 		if err := srv.Send(resp); err != nil {
 			errored = true
 			s.metrics.ResponseSendErrors.Inc()
@@ -197,11 +202,30 @@ func (s *GenericExtProcServer) notifyError(rc *RequestContext, phase int, err er
 	s.processor.ErrorHandler(rc, phase, err)
 }
 
+// logPhase emits metadata-only debug logging for a phase. Raw headers and
+// bodies are deliberately never logged: they can contain Authorization values,
+// API keys, cookies and user payloads, and debug logs are often shipped to a
+// central collector.
+func (s *GenericExtProcServer) logPhase(rc *RequestContext, phase string, attrs ...slog.Attr) {
+	if s.logger == nil || !s.logger.Enabled(rc.Context(), slog.LevelDebug) {
+		return
+	}
+	base := []slog.Attr{
+		slog.String("phase", phase),
+		slog.String("requestId", rc.RequestID),
+		slog.String("traceId", rc.TraceID),
+		slog.String("authority", rc.Authority),
+		slog.String("method", rc.Method),
+		slog.String("path", rc.Path),
+	}
+	s.logger.LogAttrs(rc.Context(), slog.LevelDebug, "processing phase", append(base, attrs...)...)
+}
+
 // processPhase dispatches one phase: routes the message type to the matching
 // processor callback and accumulates metrics and duration.
 func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest, processor RequestProcessor, rc *RequestContext) (*extprocv3.ProcessingResponse, int, error) {
 	if rc == nil {
-		s.logger.Warn("RequestContext is undefined (nil)")
+		return nil, REQUEST_PHASE_UNDETERMINED, errors.New("request context is nil")
 	}
 
 	var (
@@ -217,7 +241,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_RequestHeaders:
 		phase = REQUEST_PHASE_REQUEST_HEADERS
 		rc.setPhase(phase)
-		s.logger.Debug("Processing request Headers", slog.Any("request", req))
+		s.logPhase(rc, "REQUEST_HEADERS")
 		s.metrics.TotalRequestHeaders.Inc()
 
 		h := req.RequestHeaders
@@ -227,7 +251,6 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		err = initReqCtx(rc, h.Headers)
 		if err != nil {
 			s.logger.Error("RequestContext initialization error", slog.String("error", err.Error()))
-			s.notifyError(rc, phase, err)
 			return nil, phase, err
 		}
 		rc.EndOfStream = h.EndOfStream
@@ -239,7 +262,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_RequestBody:
 		phase = REQUEST_PHASE_REQUEST_BODY
 		rc.setPhase(phase)
-		s.logger.Debug("Processing request Body", slog.Any("request", req))
+		s.logPhase(rc, "REQUEST_BODY", slog.Int("bodyBytes", len(req.RequestBody.Body)), slog.Bool("endOfStream", req.RequestBody.EndOfStream))
 		s.metrics.TotalRequestBody.Inc()
 
 		b := req.RequestBody
@@ -254,7 +277,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_RequestTrailers:
 		phase = REQUEST_PHASE_REQUEST_TRAILERS
 		rc.setPhase(phase)
-		s.logger.Debug("Processing request Trailers", slog.Any("request", req))
+		s.logPhase(rc, "REQUEST_TRAILERS")
 		s.metrics.TotalRequestTrailers.Inc()
 
 		ts := req.RequestTrailers
@@ -263,7 +286,6 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		trailers, err = genHeaders(ts.Trailers)
 		if err != nil {
 			s.logger.Error("Failed to generate request trailers", slog.String("error", err.Error()))
-			s.notifyError(rc, phase, err)
 			return nil, phase, err
 		}
 
@@ -274,7 +296,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_ResponseHeaders:
 		phase = REQUEST_PHASE_RESPONSE_HEADERS
 		rc.setPhase(phase)
-		s.logger.Debug("Processing response Headers", slog.Any("request", req))
+		s.logPhase(rc, "RESPONSE_HEADERS")
 		s.metrics.TotalResponseHeaders.Inc()
 
 		hs := req.ResponseHeaders
@@ -284,7 +306,6 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		headers, err = genHeaders(hs.Headers)
 		if err != nil {
 			s.logger.Error("Failed to generate response headers", slog.String("error", err.Error()))
-			s.notifyError(rc, phase, err)
 			return nil, phase, err
 		}
 
@@ -302,7 +323,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_ResponseBody:
 		phase = REQUEST_PHASE_RESPONSE_BODY
 		rc.setPhase(phase)
-		s.logger.Debug("Processing response Body", slog.Any("request", req))
+		s.logPhase(rc, "RESPONSE_BODY", slog.Int("bodyBytes", len(req.ResponseBody.Body)), slog.Bool("endOfStream", req.ResponseBody.EndOfStream))
 		s.metrics.TotalResponseBody.Inc()
 
 		b := req.ResponseBody
@@ -321,7 +342,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 	case *extprocv3.ProcessingRequest_ResponseTrailers:
 		phase = REQUEST_PHASE_RESPONSE_TRAILERS
 		rc.setPhase(phase)
-		s.logger.Debug("Processing response Trailers", slog.Any("request", req))
+		s.logPhase(rc, "RESPONSE_TRAILERS")
 		s.metrics.TotalResponseTrailers.Inc()
 
 		ts := req.ResponseTrailers
@@ -330,7 +351,6 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		trailers, err = genHeaders(ts.Trailers)
 		if err != nil {
 			s.logger.Error("Failed to generate response trailers", slog.String("error", err.Error()))
-			s.notifyError(rc, phase, err)
 			return nil, phase, err
 		}
 
@@ -339,7 +359,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		rc.Duration += dur
 
 	default:
-		s.logger.Warn("Unknown request type", slog.Any("request", req))
+		s.logger.Warn("Unknown request type", slog.String("requestType", fmt.Sprintf("%T", req)))
 		err = errors.New("unknown request type") //nolint:errcheck,staticcheck
 		dur = time.Since(ps)
 		rc.Duration += dur
@@ -349,8 +369,7 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		return nil, phase, err
 	}
 
-	s.logger.Debug("Phase processing complete", slog.String("phase", RequestPhaseToString(phase)), slog.String("duration", dur.String()))
-	s.logger.Debug("RequestContext state", slog.Any("context", rc))
+	s.logPhase(rc, RequestPhaseToString(phase), slog.Duration("duration", dur))
 	response, err := rc.GetResponse(phase)
 	return response, phase, err
 }

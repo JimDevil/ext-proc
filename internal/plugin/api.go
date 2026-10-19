@@ -9,6 +9,7 @@
 package plugin
 
 import (
+	"context"
 	"log/slog"
 
 	extproc "github.com/JimDevil/ext-proc/sdk"
@@ -17,8 +18,8 @@ import (
 
 // ChainConfig is the orchestration config for one chain (defined here, in the
 // consuming package, and referenced by config.Config). Plugin-private configs
-// are not part of the typed struct: BuildChain extracts each plugin's config
-// node from the raw config tree by plugin name.
+// are not part of the typed struct: BuildRouteTable extracts each plugin's
+// config node from the raw config tree by plugin position.
 type ChainConfig struct {
 	// FailurePolicy is the unified policy for plugin execution failures:
 	// fail_closed (default, abort the request) / fail_open (skip and continue).
@@ -51,8 +52,10 @@ type MatchRule struct {
 type PluginConfig struct {
 	// Name must match the plugin's registered name.
 	Name string `json:"name" yaml:"name"`
-	// Enabled is the individual switch; disabled plugins never join the chain.
-	Enabled bool `json:"enabled" yaml:"enabled"`
+	// Enabled is the individual switch. A missing key means enabled; set
+	// enabled: false to disable a plugin. The pointer distinguishes an absent
+	// key from an explicit false, so a typo cannot silently disable traffic.
+	Enabled *bool `json:"enabled" yaml:"enabled"`
 	// Order defines chain position, ascending; equal orders keep the order
 	// they appear in the config file.
 	Order int `json:"order" yaml:"order"`
@@ -67,6 +70,12 @@ type PluginConfig struct {
 	// the global config. Each plugin owns its rules independently — one
 	// plugin's rule has no effect on the others.
 	MatchRules []MatchRule `json:"matchRules" yaml:"matchRules"`
+}
+
+// IsEnabled reports whether the plugin entry participates in the chain.
+// Missing enabled defaults to true.
+func (p PluginConfig) IsEnabled() bool {
+	return p.Enabled == nil || *p.Enabled
 }
 
 // Context is the narrow interface plugins use to operate on the current
@@ -104,6 +113,24 @@ type Context interface {
 	// Aborted reports whether the request has been short-circuited (some
 	// plugin called CancelRequest).
 	Aborted() bool
+	// Context returns the stream context. It is canceled when Envoy cancels
+	// the stream or its message timeout expires; plugins that call downstream
+	// services should pass it along and honor cancellation.
+	Context() context.Context
+	// RequestInfo returns the request metadata parsed in the headers phase
+	// (method, path, authority, request id, W3C trace id).
+	RequestInfo() RequestInfo
+	// ClearRouteCache asks Envoy to re-evaluate the route after the plugin
+	// changed a header that routing depends on.
+	ClearRouteCache()
+	// BeginPlugin marks the start of one plugin invocation. The framework
+	// calls it before every plugin so it can roll partial mutations and
+	// request-scoped state back if that plugin fails under fail_open.
+	BeginPlugin()
+	// RollbackPlugin restores the phase mutations and request-scoped state
+	// captured by BeginPlugin. It is only called by the framework on a failed
+	// fail_open plugin.
+	RollbackPlugin()
 }
 
 // Plugin is the contract every plugin implements. Embed BasePlugin and only
@@ -117,10 +144,10 @@ type Plugin interface {
 	// Get(...).String() style accessors). Returning an error fails startup
 	// (fail fast).
 	Init(cfg *gjson.Json, logger *slog.Logger) error
-	// Close releases plugin resources on graceful shutdown.
-	// Note: hot reload discards old plugin instances WITHOUT calling Close, so
-	// plugins must not hold resources that need explicit release (put DB
-	// connections in package-level singletons instead).
+	// Close releases plugin resources. It is called on graceful shutdown and
+	// for a hot-reload generation once its last in-flight stream has finished,
+	// so plugins may own per-generation resources (connections, caches) as long
+	// as they release them here. Close must be idempotent.
 	Close() error
 
 	// The six phase callbacks. header/trailer keys are lower cased (guaranteed

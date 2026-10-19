@@ -186,7 +186,7 @@
       <tr>
         <td data-i18n="cmp.r2k">故障域</td>
         <td data-i18n="cmp.r2w">插件 panic 直接掐流（503 wasm_fail_stream），FAIL_OPEN 静默放行</td>
-        <td><span data-i18n="cmp.r2e">进程隔离：崩溃只影响在途流，</span><b data-i18n="cmp.r2e2">fail-open / fail-closed 显式可配</b></td>
+        <td><span data-i18n="cmp.r2e">进程隔离：插件 panic 按流恢复，进程崩溃也不会带崩 Envoy；</span><b data-i18n="cmp.r2e2">fail-open / fail-closed 显式可配，支持插件级回滚</b></td>
       </tr>
       <tr>
         <td data-i18n="cmp.r3k">语言与调试</td>
@@ -201,7 +201,7 @@
       <tr>
         <td data-i18n="cmp.r5k">流式处理</td>
         <td data-i18n="cmp.r5w">HttpBody 逐 chunk 回调，大 body 解析易 panic</td>
-        <td data-i18n="cmp.r5e">FULL_DUPLEX_STREAMED 模式天然适配 LLM SSE 透传</td>
+        <td data-i18n="cmp.r5e">SDK 支持 chunked / FULL_DUPLEX_STREAMED；示例插件采用 BUFFERED 语义并跳过不完整分块</td>
       </tr>
     </tbody>
   </table>
@@ -210,7 +210,7 @@
 <!-- ============ ARCH ============ -->
 <section id="arch">
   <h2 data-i18n="arch.title">架构</h2>
-  <p class="desc" data-i18n="arch.desc">每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给 filter chain，插件对 headers/body 的修改随响应回传给 Envoy。</p>
+  <p class="desc" data-i18n="arch.desc">每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在六个阶段（请求/响应的 headers、body、trailers）把消息交给 filter chain，插件 mutation 随响应回传给 Envoy。</p>
   <div class="arch">
     <svg viewBox="0 0 980 330" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system,PingFang SC,sans-serif">
       <defs>
@@ -230,7 +230,7 @@
       <text x="316" y="114" text-anchor="middle" fill="#e6ecf7" font-size="15" font-weight="600" data-i18n="svg.envoy">Envoy 网关</text>
       <rect x="238" y="130" width="156" height="42" rx="9" fill="url(#hl)" stroke="#22d3ee" stroke-dasharray="4 3"/>
       <text x="316" y="148" text-anchor="middle" fill="#22d3ee" font-size="12" font-weight="600">ext_proc filter</text>
-      <text x="316" y="163" text-anchor="middle" fill="#93a0bd" font-size="10.5" data-i18n="svg.phases">headers · body · trailers</text>
+      <text x="316" y="163" text-anchor="middle" fill="#93a0bd" font-size="10.5" data-i18n="svg.phases">6 phases · request + response</text>
       <text x="316" y="205" text-anchor="middle" fill="#66738f" font-size="11" data-i18n="svg.route">路由 / 转发</text>
       <!-- ext-proc -->
       <rect x="520" y="60" width="230" height="190" rx="14" fill="url(#hl)" stroke="rgba(34,211,238,.55)"/>
@@ -261,7 +261,7 @@
   <h3 style="text-align:center;font-size:20px;margin:34px 0 8px" data-i18n="arch.chainTitle">filter chain 与插件</h3>
   <p class="desc" style="margin-bottom:22px" data-i18n="arch.chainDesc">每插件 matchRules 按请求（host+path）组装链，order 决定顺序，短路即停；插件从 config.yaml 与 init() 自注册两侧接入，热更新原子替换——在途请求走旧链，新请求即时生效。</p>
   <div class="arch" style="padding:10px">
-    <img src="assets/chain-architecture.svg" alt="plugin chain architecture — matchRules routing, per-plugin failure policy, short-circuit, atomic hot swap" style="display:block;width:100%;height:auto;border-radius:12px">
+    <img src="assets/chain-architecture.svg" alt="ext-proc production architecture — Envoy request path, six-phase plugin chain, generation lifecycle, deployment profiles and observability" style="display:block;width:100%;height:auto;border-radius:12px">
   </div>
 </section>
 
@@ -272,10 +272,10 @@
   <div class="grid">
     <div class="card"><div class="ico">⛓️</div><h3 data-i18n="feat.c1t">filter chain 编排</h3><p data-i18n="feat.c1d">按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。</p></div>
     <div class="card"><div class="ico">🧩</div><h3 data-i18n="feat.c2t">标准化插件接入</h3><p data-i18n="feat.c2d">六阶段回调 + BasePlugin 空实现 + init() 自注册：新增一个插件只需一个包、五步接入、互不影响。</p></div>
-    <div class="card"><div class="ico">🔥</div><h3 data-i18n="feat.c3t">配置热更新</h3><p data-i18n="feat.c3d">GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链直至结束，全程零重启。</p></div>
-    <div class="card"><div class="ico">🛡️</div><h3 data-i18n="feat.c4t">双层容错</h3><p data-i18n="feat.c4d">链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。静默放行必有指标可查、可告警。</p></div>
-    <div class="card"><div class="ico">📈</div><h3 data-i18n="feat.c5t">可观测性</h3><p data-i18n="feat.c5d">Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。</p></div>
-    <div class="card"><div class="ico">⚙️</div><h3 data-i18n="feat.c6t">生产工程</h3><p data-i18n="feat.c6d">三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。</p></div>
+    <div class="card"><div class="ico">🔥</div><h3 data-i18n="feat.c3t">配置热更新</h3><p data-i18n="feat.c3d">GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链，旧 generation 在最后一个流结束后 Close，全程零重启。</p></div>
+    <div class="card"><div class="ico">🛡️</div><h3 data-i18n="feat.c4t">双层容错</h3><p data-i18n="feat.c4d">链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。fail_open 会回滚该插件写入的 mutation 与请求态；必须无条件拒绝时使用 ImmediateResponse。</p></div>
+    <div class="card"><div class="ico">📈</div><h3 data-i18n="feat.c5t">可观测性</h3><p data-i18n="feat.c5d">Prometheus 指标（流数、阶段错误、带经典 bucket 的耗时直方图、按 plugin/phase 的插件延迟与失败数）+ gRPC/HTTP 健康检查 + 只记录元数据的 slog 日志；原始 header/body 永不落日志。</p></div>
+    <div class="card"><div class="ico">⚙️</div><h3 data-i18n="feat.c6t">生产工程</h3><p data-i18n="feat.c6d">三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；显式 gRPC 消息大小上限、可选 TLS/mTLS、sidecar 与跨 Pod 两种部署形态。</p></div>
     <div class="card"><div class="ico">🎯</div><h3 data-i18n="feat.c7t">路由级 matchRules</h3><p data-i18n="feat.c7d">每插件独立持有 matchRules：domain 通配 + path 前缀，首中即停；规则配置深合并覆盖全局，也可按路由关闭单个插件。</p></div>
   </div>
 </section>
@@ -315,7 +315,7 @@
 <pre><span class="tok-c"># 1. 构建并运行（依赖已 vendor，内网可离线构建）</span>
 git clone https://github.com/&lt;your-org&gt;/ext-proc.git <span class="tok-f">&amp;&amp;</span> cd ext-proc
 make vendor <span class="tok-f">&amp;&amp;</span> make build
-./ext-proc   <span class="tok-c"># gRPC :50051 · Prometheus :19090/metrics</span></pre></div>
+./bin/ext-proc   <span class="tok-c"># gRPC :50051 · Prometheus :19090/metrics</span></pre></div>
 
   <div class="code"><div class="bar"><i></i><i></i><i></i><span>envoy.yaml</span></div>
 <pre><span class="tok-y">http_filters</span>:
@@ -413,12 +413,12 @@ const I18N = {
     "why.desc":"WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合。ext_proc 把插件逻辑放进一个普通进程，代价只是每个处理阶段一次 gRPC 往返。",
     "cmp.h1":"维度","cmp.h2":"WASM 插件","cmp.r1k":"内存与尾延迟",
     "cmp.r1w":"VM 200MB 重建阈值：重建窗口丢 header、阻塞 worker，1s 冷却引发重建风暴","cmp.r1e":"没有 VM：不存在重建窗口，配置热更新","cmp.r1e2":"原子换链",
-    "cmp.r2k":"故障域","cmp.r2w":"插件 panic 直接掐流（503 wasm_fail_stream），FAIL_OPEN 静默放行","cmp.r2e":"进程隔离：崩溃只影响在途流，","cmp.r2e2":"fail-open / fail-closed 显式可配",
+    "cmp.r2k":"故障域","cmp.r2w":"插件 panic 直接掐流（503 wasm_fail_stream），FAIL_OPEN 静默放行","cmp.r2e":"进程隔离：插件 panic 按流恢复，进程崩溃也不会带崩 Envoy；","cmp.r2e2":"fail-open / fail-closed 显式可配，支持插件级回滚",
     "cmp.r3k":"语言与调试","cmp.r3w":"TinyGo 限制多，wasm log 黑盒度高","cmp.r3e":"任意 gRPC 语言；标准 k8s 工具链，可观测、可断点调试",
     "cmp.r4k":"部署运维","cmp.r4w":"内嵌 Envoy 进程，随网关一起发布","cmp.r4e":"独立服务：HPA / PDB / 优雅退出 / 灰度发布全部现成",
-    "cmp.r5k":"流式处理","cmp.r5w":"HttpBody 逐 chunk 回调，大 body 解析易 panic","cmp.r5e":"FULL_DUPLEX_STREAMED 模式天然适配 LLM SSE 透传",
-    "arch.title":"架构","arch.desc":"每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在五个阶段把请求交给 filter chain，插件对 headers/body 的修改随响应回传给 Envoy。",
-    "svg.client":"客户端","svg.envoy":"Envoy 网关","svg.phases":"headers · body · trailers","svg.route":"路由 / 转发",
+    "cmp.r5k":"流式处理","cmp.r5w":"HttpBody 逐 chunk 回调，大 body 解析易 panic","cmp.r5e":"SDK 支持 chunked / FULL_DUPLEX_STREAMED；示例插件采用 BUFFERED 语义并跳过不完整分块",
+    "arch.title":"架构","arch.desc":"每条 HTTP 请求独占一条 gRPC 双向流，Envoy 在六个阶段（请求/响应的 headers、body、trailers）把消息交给 filter chain，插件 mutation 随响应回传给 Envoy。",
+    "svg.client":"客户端","svg.envoy":"Envoy 网关","svg.phases":"6 phases · request + response","svg.route":"路由 / 转发",
     "svg.chain":"filter chain（order 升序）","svg.more":"+ 你的插件（init() 自注册）",
     "svg.upstream":"上游服务","svg.upstream2":"收到改写后的请求",
     "svg.grpc":"gRPC 双向流","svg.mutation":"mutation 回传","svg.forward":"注入头转发",
@@ -429,10 +429,10 @@ const I18N = {
     "feat.desc":"不是又一个 demo：故障语义、优雅退出、指标这些数据面的硬功夫都在框架层做好了，插件只写业务。",
     "feat.c1t":"filter chain 编排","feat.c1d":"按配置 order 升序执行，任一插件短路（ImmediateResponse）即停止后续插件；插件之间零依赖，只共享请求级状态。",
     "feat.c2t":"标准化插件接入","feat.c2d":"六阶段回调 + BasePlugin 空实现 + init() 自注册：新增一个插件只需一个包、五步接入、互不影响。",
-    "feat.c3t":"配置热更新","feat.c3d":"GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链，全程零重启。",
-    "feat.c4t":"双层容错","feat.c4d":"链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。静默放行必有指标可查、可告警。",
-    "feat.c5t":"可观测性","feat.c5d":"Prometheus 指标（流数、阶段错误、耗时直方图）+ gRPC 健康检查 + slog 结构化日志，Envoy 侧每阶段延迟可进 access log。",
-    "feat.c6t":"生产工程","feat.c6d":"三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC MaxRecvMsgSize 不设限，流控交给 Envoy 背压。",
+    "feat.c3t":"配置热更新","feat.c3d":"GoFrame gcfg watch 配置文件，filter chain 原子重建；在途请求继续走旧链，旧 generation 在最后一个流结束后 Close，全程零重启。",
+    "feat.c4t":"双层容错","feat.c4d":"链级 fail_open / fail_closed 与 Envoy failure_mode_allow 对齐，且每个插件可单独覆盖（plugins[].failurePolicy）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。fail_open 会回滚该插件写入的 mutation 与请求态；必须无条件拒绝时使用 ImmediateResponse。",
+    "feat.c5t":"可观测性","feat.c5d":"Prometheus 指标（流数、阶段错误、带经典 bucket 的耗时直方图、按 plugin/phase 的插件延迟与失败数）+ gRPC/HTTP 健康检查 + 只记录元数据的 slog 日志；原始 header/body 永不落日志。",
+    "feat.c6t":"生产工程","feat.c6d":"三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；显式 gRPC 消息大小上限、可选 TLS/mTLS、sidecar 与跨 Pod 两种部署形态。",
     "feat.c7t":"路由级 matchRules","feat.c7d":"每插件独立持有 matchRules：domain 通配 + path 前缀，首中即停；规则配置深合并覆盖全局，也可按路由关闭单个插件。",
     "pl.title":"示例插件","pl.desc":"两个从 Higress 生产场景迁移而来的 LLM 网关插件，语义与原 WASM 实现对齐，配置驱动、可单独开关。",
     "pl.m1tag":"迁移自 higress model-router",
@@ -472,12 +472,12 @@ const I18N = {
     "why.desc":"WASM plugins live inside the Envoy process — memory, failures and operations are all coupled. ext_proc moves plugin logic into an ordinary process; the price is one gRPC round-trip per processing phase.",
     "cmp.h1":"Dimension","cmp.h2":"WASM plugins","cmp.r1k":"Memory & tail latency",
     "cmp.r1w":"WASM VM rebuilds at a ~200MB threshold — the rebuild window drops headers and blocks workers; a 1s cooldown turns it into a storm","cmp.r1e":"No VM: no rebuild window; config hot-reload","cmp.r1e2":"swaps the chain atomically",
-    "cmp.r2k":"Failure domain","cmp.r2w":"A plugin panic cuts the stream (503 wasm_fail_stream); FAIL_OPEN silently passes traffic","cmp.r2e":"Process isolation: a crash only affects in-flight streams; ","cmp.r2e2":"explicit fail-open / fail-closed",
+    "cmp.r2k":"Failure domain","cmp.r2w":"A plugin panic cuts the stream (503 wasm_fail_stream); FAIL_OPEN silently passes traffic","cmp.r2e":"Process isolation: plugin panics are recovered per stream and a process crash does not take down Envoy; ","cmp.r2e2":"explicit fail-open / fail-closed with per-plugin rollback",
     "cmp.r3k":"Language & debugging","cmp.r3w":"TinyGo constraints; wasm logs are a black box","cmp.r3e":"Any gRPC language; standard Kubernetes tooling — observable and debuggable",
     "cmp.r4k":"Operations","cmp.r4w":"Embedded in the Envoy process, released with the gateway","cmp.r4e":"Standalone service: HPA, PDB, graceful drain and canary releases come for free",
-    "cmp.r5k":"Streaming","cmp.r5w":"Chunked HttpBody callbacks; large bodies are fragile","cmp.r5e":"FULL_DUPLEX_STREAMED mode is a natural fit for LLM SSE passthrough",
-    "arch.title":"Architecture","arch.desc":"Every HTTP request owns one bidirectional gRPC stream. Envoy hands the request to the chain at five phases; plugin mutations flow back with the response.",
-    "svg.client":"Client","svg.envoy":"Envoy Gateway","svg.phases":"headers · body · trailers","svg.route":"routing / forwarding",
+    "cmp.r5k":"Streaming","cmp.r5w":"Chunked HttpBody callbacks; large bodies are fragile","cmp.r5e":"The SDK supports chunked / FULL_DUPLEX_STREAMED; sample plugins use BUFFERED semantics and skip partial chunks",
+    "arch.title":"Architecture","arch.desc":"Every HTTP request owns one bidirectional gRPC stream. Envoy hands messages to the chain at six phases (request/response headers, body, trailers); plugin mutations flow back with the response.",
+    "svg.client":"Client","svg.envoy":"Envoy Gateway","svg.phases":"6 phases · request + response","svg.route":"routing / forwarding",
     "svg.chain":"filter chain (by order)","svg.more":"+ your plugin (self-registered in init())",
     "svg.upstream":"Upstream","svg.upstream2":"receives the mutated request",
     "svg.grpc":"bidirectional gRPC","svg.mutation":"mutations back","svg.forward":"with headers",
@@ -488,10 +488,10 @@ const I18N = {
     "feat.desc":"Not another demo: the hard parts of a data plane — failure semantics, graceful drain, metrics — live in the framework. Plugins write business logic only.",
     "feat.c1t":"Chain orchestration","feat.c1d":"Plugins run in configured order; an ImmediateResponse short-circuits the rest. Plugins share nothing but request-scoped state.",
     "feat.c2t":"Standard plugin API","feat.c2d":"Six phase callbacks + BasePlugin defaults + self-registration in init(): one package, five steps, zero coupling.",
-    "feat.c3t":"Hot reload","feat.c3d":"GoFrame gcfg watches the config file and rebuilds the chain atomically; in-flight requests keep the old chain. Zero restarts.",
-    "feat.c4t":"Two-layer failure policy","feat.c4d":"Chain-level fail-open / fail-closed mirrors Envoy's failure_mode_allow, and each plugin can override it (plugins[].failurePolicy): auth plugins fail-closed while routing helpers fail-open, in the same chain. Every silent fallback is visible in metrics.",
-    "feat.c5t":"Observability","feat.c5d":"Prometheus metrics (streams, phase errors, duration histograms) + gRPC health checks + structured slog logging; per-phase latency available in Envoy access logs.",
-    "feat.c6t":"Production engineering","feat.c6d":"Three-step graceful drain (unready → propagation delay → bounded stop); MaxRecvMsgSize unlimited — flow control delegated to Envoy backpressure.",
+    "feat.c3t":"Hot reload","feat.c3d":"GoFrame gcfg watches the config file and rebuilds the chain atomically; in-flight requests keep the old chain, and the retired generation is closed after its last stream. Zero restarts.",
+    "feat.c4t":"Two-layer failure policy","feat.c4d":"Chain-level fail-open / fail-closed mirrors Envoy's failure_mode_allow, and each plugin can override it (plugins[].failurePolicy): auth plugins fail-closed while routing helpers fail-open, in the same chain. fail_open rolls back the failed plugin's mutations and request state; use an immediate response when rejection must be unconditional.",
+    "feat.c5t":"Observability","feat.c5d":"Prometheus metrics (streams, phase errors, duration histograms with classic buckets, and per-plugin plugin/phase latency + failures) + gRPC/HTTP health checks + metadata-only slog logging; raw headers and bodies are never logged.",
+    "feat.c6t":"Production engineering","feat.c6d":"Three-step graceful drain (unready → propagation delay → bounded stop); explicit gRPC message limits, optional TLS/mTLS, and both sidecar and cross-pod deployment profiles.",
     "feat.c7t":"Route-scoped matchRules","feat.c7d":"Each plugin owns its matchRules — domain wildcards + path prefixes, first match wins; per-route config deep-merges over the global, or disables the plugin for those routes.",
     "pl.title":"Sample plugins","pl.desc":"Two LLM-gateway plugins migrated from real Higress production scenarios — semantics aligned with the original WASM implementations, config-driven and individually switchable.",
     "pl.m1tag":"migrated from higress model-router",

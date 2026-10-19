@@ -7,18 +7,44 @@ app:
   version: v0.1.0
 
 logger:
-  # debug / info / warn / error
-  level: debug
+  # debug / info / warn / error. Production should use info (debug logs are
+  # high volume and must never be enabled without a log-redaction review).
+  level: info
 
 server:
+  # Deployment profiles:
+  #   sidecar (same Pod as Envoy): bindAddress 127.0.0.1,
+  #     metricsBindAddress 127.0.0.1, tls.enabled false.
+  #   cross-pod Deployment: bindAddress 0.0.0.0, metricsBindAddress 0.0.0.0,
+  #     tls.enabled true (and clientCAFile for mTLS), plus a NetworkPolicy
+  #     allowing only the gateway to reach these ports.
+  bindAddress: 0.0.0.0
+  metricsBindAddress: 0.0.0.0
   # ext_proc gRPC listen port (Envoy's grpc_service points here)
   extProcPort: 50051
-  # Prometheus metrics port (/metrics). 9090 often collides with local proxy
-  # tools on laptops, so the default here is 19090.
+  # Prometheus metrics/health port (/metrics, /healthz, /readyz). 9090 often
+  # collides with local proxy tools on laptops, so the default is 19090.
   metricsPort: 19090
   # gRPC per-process concurrent-stream cap (one goroutine per stream; size it
   # with memory load tests)
   maxConcurrentStreams: 1000
+  # gRPC message limits (bytes). Must be at least as large as the bodies Envoy
+  # is configured to buffer; the gRPC default of 4 MiB is often too small for
+  # BUFFERED LLM requests.
+  maxRecvMsgSize: 16777216
+  maxSendMsgSize: 16777216
+  # TLS/mTLS for the gRPC listener. Sidecars on loopback may leave it
+  # disabled; cross-pod deployments should enable it. clientCAFile turns on
+  # mutual TLS and requires Envoy to present a client certificate.
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+    clientCAFile: ""
+    minVersion: "1.2"
+    # Poll certFile/keyFile/clientCAFile for rotation. 0 disables polling
+    # (rotation then requires a restart); 30 is a reasonable production value.
+    reloadIntervalSeconds: 0
   # Graceful shutdown: propagation delay after marking unready (seconds)
   unreadyPropagationDelaySeconds: 5
   # Graceful shutdown: drain window for in-flight streams (seconds); past it
@@ -104,8 +130,10 @@ chain:
         # After a hit, delete the key from the source header (keeps it from
         # leaking upstream; query sources cannot be deleted)
         stripSource: false
-        # When no source matches: true rejects (rejectStatus), false passes
-        required: false
+        # When no source matches: true rejects (rejectStatus), false passes.
+        # The sample runs as an auth-style extractor, so it rejects by default;
+        # set false if this plugin is only used to normalize an optional key.
+        required: true
         rejectStatus: 401
         rejectMessage: "missing api key"
         # Route-scoped overrides for THIS plugin:

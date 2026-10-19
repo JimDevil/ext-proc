@@ -32,7 +32,7 @@ func newTestPlugin(t *testing.T, cfg map[string]any) *ModelRouter {
 // runThrough executes the headers -> body phases, simulating one request.
 func runThrough(t *testing.T, p *ModelRouter, path, contentType string, body []byte) *plugintest.MockContext {
 	t.Helper()
-	ctx := plugintest.NewMockContext()
+	ctx := plugintest.NewMockContext().WithEndOfStream(true)
 	hdrs := extproc.AllHeaders{
 		Headers: map[string][]string{
 			":path":        {path},
@@ -299,5 +299,103 @@ func TestModelRouterMultipart(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("model field not found in the rewritten body")
+	}
+}
+
+func TestModelRouterExplicitEmptyModelHeader(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{"modelToHeader": ""})
+	ctx := runThrough(t, p, "/v1/chat/completions", "application/json", []byte(`{"model":"glm-5.3"}`))
+	if _, ok := ctx.LastHeaderValue("x-higress-llm-model"); ok {
+		t.Fatal("an explicitly empty modelToHeader must disable header injection")
+	}
+}
+
+func TestModelRouterStreamedBodyIsSkipped(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{"modelToHeader": "x-higress-llm-model"})
+	ctx := plugintest.NewMockContext()
+	h := extproc.AllHeaders{
+		Headers: map[string][]string{
+			":path":        {"/v1/chat/completions"},
+			"content-type": {"application/json"},
+		},
+	}
+	if err := p.OnRequestHeaders(ctx, h); err != nil {
+		t.Fatalf("OnRequestHeaders failed: %v", err)
+	}
+	// First chunk: not end of stream. It must be remembered as streamed.
+	if err := p.OnRequestBody(ctx, []byte(`{"model":"glm-`)); err != nil {
+		t.Fatalf("first chunk failed: %v", err)
+	}
+	// Final chunk: even though it is end-of-stream, the plugin cannot know the
+	// full body, so it must not rewrite it.
+	if err := p.OnRequestBody(ctx, []byte(`5.3"}`)); err != nil {
+		t.Fatalf("final chunk failed: %v", err)
+	}
+	if _, ok := ctx.LastHeaderValue("x-higress-llm-model"); ok {
+		t.Fatal("streamed bodies must not be treated as complete bodies")
+	}
+	if _, rewritten := ctx.Body(); rewritten {
+		t.Fatal("streamed bodies must not be rewritten")
+	}
+}
+
+func TestModelRouterRejectsInvalidHeaderValues(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{"modelToHeader": "x-higress-llm-model"})
+	ctx := runThrough(t, p, "/v1/chat/completions", "application/json", []byte(`{"model":"bad\nvalue"}`))
+	if _, ok := ctx.LastHeaderValue("x-higress-llm-model"); ok {
+		t.Fatal("a model value containing CR/LF must not be injected")
+	}
+	if _, rewritten := ctx.Body(); rewritten {
+		t.Fatal("the body must be left untouched when the model value is invalid")
+	}
+}
+
+func TestModelRouterInvalidConfigFailsFast(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		cfg  map[string]any
+	}{
+		{"pseudo model header", map[string]any{"modelToHeader": ":authority"}},
+		{"protected provider header", map[string]any{"addProviderHeader": "x-envoy-upstream-rq-timeout-ms"}},
+		{"invalid regex", map[string]any{"autoRouting": map[string]any{"enable": true, "rules": []any{map[string]any{"pattern": "(", "model": "m"}}}}},
+		{"empty rule field", map[string]any{"autoRouting": map[string]any{"enable": true, "rules": []any{map[string]any{"pattern": "x"}}}}},
+		{"invalid default model", map[string]any{"autoRouting": map[string]any{"enable": true, "defaultModel": "bad\nmodel"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			p := New()
+			if err := p.Init(gfjson.New(tt.cfg), slog.New(slog.NewTextHandler(io.Discard, nil))); err == nil {
+				t.Fatal("expected config validation to fail")
+			}
+		})
+	}
+}
+
+func TestModelRouterNilConfigUsesHigressDefaults(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, nil)
+	ctx := runThrough(t, p, "/v1/chat/completions", "application/json", []byte(`{"model":"glm-5.3"}`))
+	if got, ok := ctx.LastHeaderValue("x-higress-llm-model"); !ok || got != "glm-5.3" {
+		t.Fatalf("nil config should use the higress default header: (%q,%v)", got, ok)
+	}
+}
+
+func TestModelRouterClearsRouteCacheAfterInjection(t *testing.T) {
+	t.Parallel()
+
+	p := newTestPlugin(t, map[string]any{"modelToHeader": "x-higress-llm-model"})
+	ctx := runThrough(t, p, "/v1/chat/completions", "application/json", []byte(`{"model":"glm-5.3"}`))
+	if !ctx.RouteCacheCleared() {
+		t.Fatal("injecting a routing header must clear Envoy's route cache")
 	}
 }

@@ -4,37 +4,58 @@ import (
 	"context"
 	"log/slog"
 
+	"github.com/gogf/gf/v2/errors/gerror"
+
 	"github.com/JimDevil/ext-proc/internal/model/config"
 	"github.com/JimDevil/ext-proc/internal/plugin"
 	"github.com/JimDevil/ext-proc/internal/processor"
 )
 
-// InitChain builds the plugin route table (global chain + matchRule variants)
-// and registers the global processor, plus the hot-reload hook: when the gcfg
-// watcher detects a config change the table is rebuilt wholesale and swapped
-// atomically, without restarting the process.
+// InitChain builds the initial plugin route table and registers the
+// transactional hot-reload hook. The hook validates the next generation,
+// builds the whole table, swaps it atomically and only then publishes the new
+// config snapshot. A failed rebuild leaves the previous generation intact.
 func InitChain(ctx context.Context) error {
-	proc := processor.New(config.Cfg.App.Name, config.Log)
+	snap := config.Current()
+	if snap.Log == nil {
+		return gerror.New("logger is not initialized")
+	}
+	if snap.Raw == nil {
+		return gerror.New("raw config tree is not initialized")
+	}
 
-	rebuild := func(ctx context.Context) error {
-		table, err := plugin.BuildRouteTable(config.Cfg.Chain, config.Raw, config.Log)
-		if err != nil {
+	proc := processor.New(snap.Cfg.App.Name, snap.Log)
+	table, err := plugin.BuildRouteTable(snap.Cfg.Chain, snap.Raw, snap.Log, proc.Observer())
+	if err != nil {
+		return gerror.Wrap(err, "build initial plugin route table")
+	}
+	proc.SwapChain(table)
+
+	config.SetReloadHook(func(ctx context.Context, next *config.Snapshot) error {
+		if next == nil {
+			return gerror.New("reload snapshot is nil")
+		}
+		old := config.Current()
+		if err := config.ValidateReloadable(old.Cfg, next.Cfg); err != nil {
 			return err
 		}
-		// Atomic swap: in-flight streams keep the old table, new traffic uses
-		// the new one.
+		if next.Raw == nil {
+			return gerror.New("reload snapshot has no raw config tree")
+		}
+		next.Log = old.Log
+		table, err := plugin.BuildRouteTable(next.Cfg.Chain, next.Raw, next.Log, proc.Observer())
+		if err != nil {
+			return gerror.Wrap(err, "build reloaded plugin route table")
+		}
+		// The table is immutable and swapped atomically; in-flight streams
+		// keep the old table and its plugin instances until they finish.
 		proc.SwapChain(table)
-		config.Log.Info("plugin route table ready",
+		config.Store(next)
+		next.Log.Info("config reloaded",
 			slog.Any("plugins", table.Names()), slog.Int("matchRules", table.RuleCount()))
 		return nil
-	}
+	})
 
-	if err := rebuild(ctx); err != nil {
-		return err
-	}
-
-	// Register the hot-reload hook (invoked by gcfg's OnChange).
-	config.OnConfigReload = rebuild
 	processor.Register(proc)
 	return nil
 }

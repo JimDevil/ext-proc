@@ -1,0 +1,50 @@
+# Sidecar profile: ext-proc runs in the same Pod as Envoy and is reached only
+# through loopback. No Service, Ingress or ingress NetworkPolicy is needed.
+app:
+  name: ext-proc
+  version: v0.1.0
+
+logger:
+  level: info
+
+server:
+  # Loopback only: Envoy connects to 127.0.0.1:50051.
+  bindAddress: 127.0.0.1
+  metricsBindAddress: 127.0.0.1
+  extProcPort: 50051
+  metricsPort: 19090
+  maxConcurrentStreams: 1000
+  maxRecvMsgSize: 16777216
+  maxSendMsgSize: 16777216
+  # Loopback traffic does not need TLS. Terminate TLS/mTLS at the gateway.
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+    clientCAFile: ""
+    minVersion: "1.2"
+    # Loopback sidecar: TLS is terminated at the gateway.
+    reloadIntervalSeconds: 0
+  unreadyPropagationDelaySeconds: 5
+  terminationGracePeriodSeconds: 15
+
+chain:
+  failurePolicy: fail_closed
+  plugins:
+    - name: model-router
+      enabled: true
+      order: 10
+      config:
+        modelKey: model
+        modelToHeader: x-higress-llm-model
+        enableOnPathSuffix:
+          - /chat/completions
+          - /completions
+          - /embeddings
+          - /messages
+    - name: apikey-extract
+      enabled: true
+      order: 20
+      config:
+        targetHeader: x-extracted-apikey
+        required: true

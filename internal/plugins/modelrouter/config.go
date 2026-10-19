@@ -1,18 +1,23 @@
 package modelrouter
 
 import (
+	"fmt"
 	"log/slog"
 	"regexp"
+	"slices"
 
+	extproc "github.com/JimDevil/ext-proc/sdk"
 	"github.com/gogf/gf/v2/encoding/gjson"
+	"github.com/gogf/gf/v2/errors/gerror"
 )
 
 const (
 	// autoModelPrefix is the magic model name that triggers auto routing
 	// (aligned with the higress convention).
 	autoModelPrefix = "higress/auto"
-	// defaultModelHeader is the auto-routing target header when modelToHeader
-	// is not configured (aligned with the higress default).
+	// defaultModelHeader is the routing header used when modelToHeader is not
+	// configured at all (aligned with the higress default). Set it explicitly
+	// to "" to disable header injection.
 	defaultModelHeader = "x-higress-llm-model"
 )
 
@@ -67,7 +72,8 @@ type Config struct {
 func parseConfig(cfg *gjson.Json, logger *slog.Logger) (*Config, error) {
 	c := &Config{
 		modelKey:           "model",
-		enableOnPathSuffix: defaultPathSuffixes,
+		modelToHeader:      defaultModelHeader,
+		enableOnPathSuffix: slices.Clone(defaultPathSuffixes),
 	}
 	if cfg == nil {
 		return c, nil
@@ -76,12 +82,25 @@ func parseConfig(cfg *gjson.Json, logger *slog.Logger) (*Config, error) {
 	if v := cfg.Get("modelKey").String(); v != "" {
 		c.modelKey = v
 	}
-	c.modelToHeader = cfg.Get("modelToHeader").String()
+	// Distinguish "key absent" (use the higress-compatible default header)
+	// from "key explicitly empty" (disable header injection entirely).
+	if node := cfg.Get("modelToHeader"); node == nil || node.IsNil() {
+		c.modelToHeader = defaultModelHeader
+	} else {
+		c.modelToHeader = node.String()
+	}
 	c.addProviderHeader = cfg.Get("addProviderHeader").String()
 	c.keepOriginalModelName = cfg.Get("keepOriginalModelName").Bool()
 
+	if err := validateHeaderOption("modelToHeader", c.modelToHeader); err != nil {
+		return nil, err
+	}
+	if err := validateHeaderOption("addProviderHeader", c.addProviderHeader); err != nil {
+		return nil, err
+	}
+
 	if suffixes := cfg.Get("enableOnPathSuffix"); suffixes != nil && len(suffixes.Strings()) > 0 {
-		c.enableOnPathSuffix = suffixes.Strings()
+		c.enableOnPathSuffix = slices.Clone(suffixes.Strings())
 	}
 
 	// Auto routing: a rule that fails to compile is skipped with a warning
@@ -89,19 +108,21 @@ func parseConfig(cfg *gjson.Json, logger *slog.Logger) (*Config, error) {
 	if ar := cfg.GetJson("autoRouting"); ar != nil {
 		c.enableAutoRouting = ar.Get("enable").Bool()
 		c.defaultModel = ar.Get("defaultModel").String()
-		for _, rule := range ar.GetJsons("rules") {
+		if err := validateHeaderValueOption("autoRouting.defaultModel", c.defaultModel); err != nil {
+			return nil, err
+		}
+		for i, rule := range ar.GetJsons("rules") {
 			pattern := rule.Get("pattern").String()
 			model := rule.Get("model").String()
 			if pattern == "" || model == "" {
-				logger.Warn("ignoring invalid auto-routing rule (empty pattern/model)",
-					slog.String("pattern", pattern), slog.String("model", model))
-				continue
+				return nil, gerror.Newf("model-router: autoRouting.rules[%d] must set both pattern and model", i)
+			}
+			if err := validateHeaderValueOption(fmt.Sprintf("autoRouting.rules[%d].model", i), model); err != nil {
+				return nil, err
 			}
 			re, err := regexp.Compile(pattern)
 			if err != nil {
-				logger.Warn("auto-routing regex failed to compile, ignoring the rule",
-					slog.String("pattern", pattern), slog.String("error", err.Error()))
-				continue
+				return nil, gerror.Wrapf(err, "model-router: autoRouting.rules[%d] has an invalid pattern", i)
 			}
 			c.autoRoutingRules = append(c.autoRoutingRules, autoRule{pattern: re, model: model})
 		}
@@ -111,4 +132,28 @@ func parseConfig(cfg *gjson.Json, logger *slog.Logger) (*Config, error) {
 		logger.Warn("auto routing enabled but neither rules nor defaultModel configured; higress/auto requests stay untouched")
 	}
 	return c, nil
+}
+
+// validateHeaderOption rejects a configured header name that Envoy would not
+// accept. Empty means "feature disabled" and is always valid.
+func validateHeaderOption(field, name string) error {
+	if name == "" {
+		return nil
+	}
+	if err := extproc.ValidateMutableHeaderName(name); err != nil {
+		return gerror.Wrapf(err, "model-router: invalid %s", field)
+	}
+	return nil
+}
+
+// validateHeaderValueOption rejects a configured value that cannot be written
+// into an HTTP header.
+func validateHeaderValueOption(field, value string) error {
+	if value == "" {
+		return nil
+	}
+	if err := extproc.ValidateHeaderValue([]byte(value)); err != nil {
+		return gerror.Wrapf(err, "model-router: invalid %s", field)
+	}
+	return nil
 }

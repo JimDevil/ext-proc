@@ -1,0 +1,46 @@
+# ext-proc configuration for the local e2e stack.
+app:
+  name: ext-proc
+  version: e2e
+
+logger:
+  level: info
+
+server:
+  bindAddress: 0.0.0.0
+  metricsBindAddress: 0.0.0.0
+  extProcPort: 50051
+  metricsPort: 19090
+  maxConcurrentStreams: 1000
+  maxRecvMsgSize: 16777216
+  maxSendMsgSize: 16777216
+  tls:
+    enabled: false
+    certFile: ""
+    keyFile: ""
+    clientCAFile: ""
+    minVersion: "1.2"
+    reloadIntervalSeconds: 0
+  unreadyPropagationDelaySeconds: 2
+  terminationGracePeriodSeconds: 10
+
+chain:
+  failurePolicy: fail_closed
+  plugins:
+    - name: model-router
+      enabled: true
+      order: 10
+      config:
+        modelKey: model
+        modelToHeader: x-higress-llm-model
+        enableOnPathSuffix:
+          - /chat/completions
+          - /completions
+          - /embeddings
+          - /messages
+    - name: apikey-extract
+      enabled: true
+      order: 20
+      config:
+        targetHeader: x-extracted-apikey
+        required: false

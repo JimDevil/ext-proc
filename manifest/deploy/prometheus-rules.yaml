@@ -1,0 +1,100 @@
+# Prometheus alerting rules for ext-proc.
+#
+# Assumes the scrape job is named "ext-proc" (adjust the job label and the
+# active-stream threshold to your deployment). Apply with:
+#   kubectl -n <monitoring-ns> apply -f prometheus-rules.yaml
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: ext-proc
+  namespace: monitoring
+  labels:
+    app: ext-proc
+spec:
+  groups:
+    - name: ext-proc
+      rules:
+        - alert: ExtProcDown
+          expr: up{job="ext-proc"} == 0
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ext-proc target is down"
+            description: "Prometheus cannot scrape ext-proc; gateways may be failing requests."
+
+        - alert: ExtProcPluginFailClosed
+          expr: sum by (plugin, phase) (rate(extproc_plugin_failures_total{policy="fail_closed"}[5m])) > 0
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc plugin is failing closed"
+            description: "Plugin {{ $labels.plugin }} fails in {{ $labels.phase }} under fail_closed; requests are being aborted."
+
+        - alert: ExtProcPluginFailOpen
+          expr: sum by (plugin, phase) (rate(extproc_plugin_failures_total{policy="fail_open"}[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc plugin is failing open"
+            description: "Plugin {{ $labels.plugin }} fails in {{ $labels.phase }} under fail_open; requests continue without its mutations."
+
+        - alert: ExtProcStreamErrorRate
+          expr: |
+            sum(rate(extproc_errored_streams_total[5m]))
+              / clamp_min(sum(rate(extproc_streams_total[5m])), 1) > 0.01
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc stream error rate above 1%"
+            description: "More than 1% of streams are failing; check plugin logs and Envoy failure_mode_allow."
+
+        - alert: ExtProcPanic
+          expr: increase(extproc_panic_recoveries_total[5m]) > 0
+          for: 1m
+          labels:
+            severity: critical
+          annotations:
+            summary: "ext-proc recovered a processor panic"
+            description: "A plugin or processor panicked. The stream followed the failure policy; inspect the stack/log immediately."
+
+        - alert: ExtProcHighLatency
+          expr: |
+            histogram_quantile(0.99,
+              sum by (le) (rate(extproc_stream_duration_seconds_bucket[5m]))) > 0.5
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc p99 stream duration above 500ms"
+            description: "ext_proc overhead is high; check plugin latency and Envoy message_timeout."
+
+        - alert: ExtProcEmptyResponses
+          expr: sum(rate(extproc_empty_responses_total[5m])) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc returned fallback empty responses"
+            description: "A processor returned no response and the SDK used an empty continue; check plugin error paths."
+
+        - alert: ExtProcActiveStreamsHigh
+          expr: extproc_active_streams > 800
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc active streams above 800"
+            description: "The process is near maxConcurrentStreams (1000); scale replicas or raise the limit after a load test."
+
+        - alert: ExtProcNoTraffic
+          expr: sum(rate(extproc_streams_total[10m])) == 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "ext-proc receives no traffic"
+            description: "Either the gateway is not routing to ext-proc or the deployment is misconfigured."

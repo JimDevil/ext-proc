@@ -3,7 +3,10 @@ package apikeyextract
 import (
 	"log/slog"
 	"net/http"
+	"slices"
+	"strings"
 
+	extproc "github.com/JimDevil/ext-proc/sdk"
 	gfjson "github.com/gogf/gf/v2/encoding/gjson"
 	"github.com/gogf/gf/v2/errors/gerror"
 )
@@ -59,9 +62,9 @@ func parseConfig(cfg *gfjson.Json, logger *slog.Logger) (*Config, error) {
 		targetHeader:  defaultTargetHeader,
 		rejectStatus:  http.StatusUnauthorized,
 		rejectMessage: "missing api key",
-		sources:       defaultSources,
 	}
 	if cfg == nil {
+		c.sources = slices.Clone(defaultSources)
 		return c, nil
 	}
 
@@ -70,32 +73,70 @@ func parseConfig(cfg *gfjson.Json, logger *slog.Logger) (*Config, error) {
 	}
 	c.stripSource = cfg.Get("stripSource").Bool()
 	c.required = cfg.Get("required").Bool()
-	if s := cfg.Get("rejectStatus").Int(); s > 0 {
-		c.rejectStatus = int32(s)
+	if node := cfg.Get("rejectStatus"); node != nil && !node.IsNil() {
+		status := node.Int()
+		if status < 100 || status > 599 {
+			return nil, gerror.Newf("apikey-extract: rejectStatus %d is invalid (must be 100-599)", status)
+		}
+		c.rejectStatus = int32(status)
 	}
 	if v := cfg.Get("rejectMessage").String(); v != "" {
 		c.rejectMessage = v
 	}
 
-	for _, s := range cfg.GetJsons("sources") {
-		sc := sourceConfig{
-			sourceType: s.Get("type").String(),
-			name:       s.Get("name").String(),
-			bearer:     s.Get("bearer").Bool(),
+	// A configured sources list replaces the defaults entirely. This is the
+	// whole point of the option: operators decide the priority order and which
+	// sources are trusted, so silently keeping the defaults in front of the
+	// configured entries would make the option ineffective.
+	sourcesNode := cfg.Get("sources")
+	if sourcesNode == nil || sourcesNode.IsNil() {
+		c.sources = slices.Clone(defaultSources)
+	} else {
+		for i, s := range cfg.GetJsons("sources") {
+			sc := sourceConfig{
+				sourceType: s.Get("type").String(),
+				name:       s.Get("name").String(),
+				bearer:     s.Get("bearer").Bool(),
+			}
+			if sc.sourceType != "header" && sc.sourceType != "query" {
+				return nil, gerror.Newf("apikey-extract: sources[%d] has invalid type %q (must be header/query)", i, sc.sourceType)
+			}
+			if sc.name == "" {
+				return nil, gerror.Newf("apikey-extract: sources[%d] has an empty name", i)
+			}
+			if sc.bearer && sc.sourceType != "header" {
+				return nil, gerror.Newf("apikey-extract: sources[%d] bearer is only valid for header sources", i)
+			}
+			if sc.sourceType == "header" {
+				validator := extproc.ValidateHeaderName
+				if c.stripSource {
+					// Removing the source must not target an Envoy-protected
+					// header; fail at startup instead of every request.
+					validator = extproc.ValidateMutableHeaderName
+				}
+				if err := validator(sc.name); err != nil {
+					return nil, gerror.Wrapf(err, "apikey-extract: sources[%d]", i)
+				}
+			}
+			c.sources = append(c.sources, sc)
 		}
-		if sc.sourceType != "header" && sc.sourceType != "query" {
-			logger.Warn("ignoring an invalid extraction source (type must be header/query)",
-				slog.String("type", sc.sourceType), slog.String("name", sc.name))
-			continue
+		if len(c.sources) == 0 {
+			return nil, gerror.New("apikey-extract: the configured sources list must contain at least one entry")
 		}
-		if sc.name == "" {
-			logger.Warn("ignoring an invalid extraction source (empty name)", slog.String("type", sc.sourceType))
-			continue
-		}
-		c.sources = append(c.sources, sc)
 	}
-	if len(c.sources) == 0 {
-		return nil, gerror.New("apikey-extract: the configured sources list has no valid entries")
+
+	if err := extproc.ValidateMutableHeaderName(c.targetHeader); err != nil {
+		return nil, gerror.Wrap(err, "apikey-extract: invalid targetHeader")
+	}
+	if err := extproc.ValidateStatus(c.rejectStatus); err != nil {
+		return nil, gerror.Wrap(err, "apikey-extract: invalid rejectStatus")
+	}
+	if c.stripSource {
+		for _, s := range c.sources {
+			if s.sourceType == "header" && strings.EqualFold(s.name, c.targetHeader) {
+				return nil, gerror.Newf("apikey-extract: stripSource would remove the target header %q; use a different source or targetHeader", c.targetHeader)
+			}
+		}
 	}
 
 	return c, nil

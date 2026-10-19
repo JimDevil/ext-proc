@@ -40,9 +40,9 @@ func TestRouteTableCompose(t *testing.T) {
 	//   sw:   global + one rule (*.internal.corp → disable)
 	//   open: global only (no rules)
 	var capGot, swGot, openGot []string
-	Register("rt-cap", func() Plugin { return &capturePlugin{name: "rt-cap", got: &capGot} })
-	Register("rt-sw", func() Plugin { return &capturePlugin{name: "rt-sw", got: &swGot} })
-	Register("rt-open", func() Plugin { return &capturePlugin{name: "rt-open", got: &openGot} })
+	registerTestPlugin(t, "rt-cap", func() Plugin { return &capturePlugin{name: "rt-cap", got: &capGot} })
+	registerTestPlugin(t, "rt-sw", func() Plugin { return &capturePlugin{name: "rt-sw", got: &swGot} })
+	registerTestPlugin(t, "rt-open", func() Plugin { return &capturePlugin{name: "rt-open", got: &openGot} })
 
 	tree := gjson.New(map[string]any{
 		"chain": map[string]any{
@@ -64,9 +64,9 @@ func TestRouteTableCompose(t *testing.T) {
 	cfg := ChainConfig{
 		FailurePolicy: "fail_closed",
 		Plugins: []PluginConfig{
-			{Name: "rt-cap", Enabled: true, Order: 10, MatchRules: []MatchRule{{Domain: []string{"chat.example.com"}, PathPrefix: "/v1/chat"}}},
-			{Name: "rt-sw", Enabled: true, Order: 20, MatchRules: []MatchRule{{Domain: []string{"*.internal.corp"}, Disable: true}}},
-			{Name: "rt-open", Enabled: true, Order: 30},
+			{Name: "rt-cap", Enabled: boolPtr(true), Order: 10, MatchRules: []MatchRule{{Domain: []string{"chat.example.com"}, PathPrefix: "/v1/chat"}}},
+			{Name: "rt-sw", Enabled: boolPtr(true), Order: 20, MatchRules: []MatchRule{{Domain: []string{"*.internal.corp"}, Disable: true}}},
+			{Name: "rt-open", Enabled: boolPtr(true), Order: 30},
 		},
 	}
 
@@ -125,10 +125,10 @@ func TestRouteTableFallbackIsGlobal(t *testing.T) {
 	t.Parallel()
 
 	var got []string
-	Register("rt-fallback", func() Plugin { return &capturePlugin{name: "rt-fallback", got: &got} })
+	registerTestPlugin(t, "rt-fallback", func() Plugin { return &capturePlugin{name: "rt-fallback", got: &got} })
 
 	cfg := ChainConfig{
-		Plugins: []PluginConfig{{Name: "rt-fallback", Enabled: true, Order: 10}},
+		Plugins: []PluginConfig{{Name: "rt-fallback", Enabled: boolPtr(true), Order: 10}},
 	}
 	table, err := BuildRouteTable(cfg, nil, testLogger)
 	if err != nil {
@@ -150,7 +150,7 @@ func TestBuildRouteTableUnknownPlugin(t *testing.T) {
 
 	// A plugin that is not registered anywhere must fail the build.
 	cfg := ChainConfig{
-		Plugins: []PluginConfig{{Name: "no-such-plugin", Enabled: true, Order: 10}},
+		Plugins: []PluginConfig{{Name: "no-such-plugin", Enabled: boolPtr(true), Order: 10}},
 	}
 	_, err := BuildRouteTable(cfg, nil, testLogger)
 	if err == nil || !strings.Contains(err.Error(), "not registered") {
@@ -164,13 +164,13 @@ func TestRouteTableSortsByOrder(t *testing.T) {
 	// Config lists the plugins out of order; the table must still compose the
 	// chain in ascending order (config-file order on ties).
 	var sortGot []string
-	Register("rt-sort-late", func() Plugin { return &capturePlugin{name: "rt-sort-late", got: &sortGot} })
-	Register("rt-sort-early", func() Plugin { return &capturePlugin{name: "rt-sort-early", got: &sortGot} })
+	registerTestPlugin(t, "rt-sort-late", func() Plugin { return &capturePlugin{name: "rt-sort-late", got: &sortGot} })
+	registerTestPlugin(t, "rt-sort-early", func() Plugin { return &capturePlugin{name: "rt-sort-early", got: &sortGot} })
 
 	cfg := ChainConfig{
 		Plugins: []PluginConfig{
-			{Name: "rt-sort-late", Enabled: true, Order: 30},
-			{Name: "rt-sort-early", Enabled: true, Order: 10},
+			{Name: "rt-sort-late", Enabled: boolPtr(true), Order: 30},
+			{Name: "rt-sort-early", Enabled: boolPtr(true), Order: 10},
 		},
 	}
 	table, err := BuildRouteTable(cfg, nil, testLogger)

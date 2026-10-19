@@ -1,0 +1,40 @@
+# Local end-to-end stack: Envoy -> ext_proc -> echo upstream.
+#
+#   docker compose -f test/e2e/docker-compose.yaml up -d --build
+#   ./test/e2e/run.sh
+#   docker compose -f test/e2e/docker-compose.yaml down -v
+services:
+  ext-proc:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    environment:
+      EXT_PROC_CONFIG: /config/config.yaml
+    volumes:
+      - ./config.yaml:/config/config.yaml:ro
+    ports:
+      - "19090:19090"
+    healthcheck:
+      test: ["CMD", "/app/ext-proc", "--healthcheck"]
+      interval: 5s
+      timeout: 2s
+      retries: 10
+    security_opt:
+      - no-new-privileges:true
+
+  echo:
+    image: mendhak/http-https-echo:31
+    environment:
+      HTTP_PORT: "8080"
+    expose:
+      - "8080"
+
+  envoy:
+    image: envoyproxy/envoy:v1.35-latest
+    volumes:
+      - ./envoy.yaml:/etc/envoy/envoy.yaml:ro
+    ports:
+      - "8080:8080"
+    depends_on:
+      - ext-proc
+      - echo

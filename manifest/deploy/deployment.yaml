@@ -1,6 +1,8 @@
-# Standalone deployment (cross-pod): ext_proc runs as a regular Deployment and
-# is reached by Envoy through a Service. For the recommended same-pod sidecar
-# layout see the README; this manifest is for quick verification.
+# Cross-pod deployment: ext_proc runs as a regular Deployment reached by Envoy
+# through a Service. The listener binds 0.0.0.0, so this profile MUST be
+# protected by TLS/mTLS and a NetworkPolicy before production use.
+#
+# For the same-Pod sidecar layout see manifest/deploy/sidecar/.
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -14,14 +16,46 @@ data:
     logger:
       level: info
     server:
+      # Cross-pod: bind all interfaces, restrict access with NetworkPolicy and
+      # enable TLS (set enabled true, mount the certificate Secret, and add
+      # clientCAFile for mTLS).
+      bindAddress: 0.0.0.0
+      metricsBindAddress: 0.0.0.0
       extProcPort: 50051
       metricsPort: 9090
       maxConcurrentStreams: 1000
+      maxRecvMsgSize: 16777216
+      maxSendMsgSize: 16777216
+      tls:
+        enabled: false
+        certFile: ""
+        keyFile: ""
+        clientCAFile: ""
+        minVersion: "1.2"
+        # Poll certificate files for rotation without a restart.
+        reloadIntervalSeconds: 0
       unreadyPropagationDelaySeconds: 5
       terminationGracePeriodSeconds: 15
     chain:
       failurePolicy: fail_closed
-      plugins: []   # keep in sync with manifest/config/config.yaml (omitted here; fill in before deploying)
+      plugins:
+        - name: model-router
+          enabled: true
+          order: 10
+          config:
+            modelKey: model
+            modelToHeader: x-higress-llm-model
+            enableOnPathSuffix:
+              - /chat/completions
+              - /completions
+              - /embeddings
+              - /messages
+        - name: apikey-extract
+          enabled: true
+          order: 20
+          config:
+            targetHeader: x-extracted-apikey
+            required: true
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -32,6 +66,12 @@ metadata:
     app: ext-proc
 spec:
   replicas: 2
+  minReadySeconds: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: ext-proc
@@ -44,44 +84,138 @@ spec:
         prometheus.io/port: "9090"
         prometheus.io/path: /metrics
     spec:
+      automountServiceAccountToken: false
       terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+        fsGroup: 65532
+        seccompProfile:
+          type: RuntimeDefault
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: ext-proc
       containers:
         - name: extproc
-          image: ghcr.io/JimDevil/ext-proc:v0.1.0  # adjust to your registry
+          # Pin by digest in production; the tag is only a readable reference.
+          image: ghcr.io/JimDevil/ext-proc:v0.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           ports:
             - name: grpc
               containerPort: 50051
             - name: metrics
               containerPort: 9090
-          volumeMounts:
-            - name: config
-              mountPath: /app/manifest/config
-              readOnly: true
+          startupProbe:
+            grpc:
+              port: 50051
+            failureThreshold: 30
+            periodSeconds: 2
           readinessProbe:
             grpc:
               port: 50051
-            initialDelaySeconds: 3
+            initialDelaySeconds: 2
             periodSeconds: 5
+            timeoutSeconds: 2
+          livenessProbe:
+            grpc:
+              port: 50051
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           resources:
             requests:
               cpu: 250m
               memory: 256Mi
             limits:
+              cpu: "1"
               memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /app/manifest/config
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+            # Mount the TLS material and enable server.tls in the ConfigMap
+            # before exposing this service outside the trusted network.
+            # - name: tls
+            #   mountPath: /etc/ext-proc/tls
+            #   readOnly: true
       volumes:
         - name: config
           configMap:
             name: ext-proc-config
+        - name: tmp
+          emptyDir: {}
+        # - name: tls
+        #   secret:
+        #     secretName: ext-proc-tls
 ---
 apiVersion: v1
 kind: Service
 metadata:
   name: ext-proc
   namespace: envoy-gateway-system
+  labels:
+    app: ext-proc
 spec:
   selector:
     app: ext-proc
   ports:
     - name: grpc
       port: 50051
-      targetPort: 50051
+      targetPort: grpc
+  # Metrics are scraped from the Pod annotation; do not expose them here.
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: ext-proc
+  namespace: envoy-gateway-system
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: ext-proc
+---
+# Template: restrict 50051/9090 to the gateway and monitoring namespaces.
+# Adjust the namespace/pod labels to your installation.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ext-proc
+  namespace: envoy-gateway-system
+spec:
+  podSelector:
+    matchLabels:
+      app: ext-proc
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: envoy-gateway-system
+          podSelector:
+            matchLabels:
+              app.kubernetes.io/name: higress-gateway
+      ports:
+        - protocol: TCP
+          port: 50051
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: monitoring
+      ports:
+        - protocol: TCP
+          port: 9090
