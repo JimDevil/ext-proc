@@ -10,10 +10,10 @@
 
 ## 架构约定（改代码前必读）
 
-- **责任链**：`internal/plugin` 定义插件接入标准（`Plugin` 接口）、注册表与 `Chain`；`internal/processor` 把 SDK 的六阶段回调桥接到责任链；`internal/server` 负责进程装配
+- **filter chain**：`internal/plugin` 定义插件接入标准（`Plugin` 接口）、注册表与 `Chain`；`internal/processor` 把 SDK 的六阶段回调桥接到 filter chain；`internal/server` 负责进程装配
 - **每个插件一个包**（`internal/plugins/<name>`），插件之间零依赖，只依赖 `internal/plugin` 暴露的接口与 SDK 的纯数据类型
-- **配置驱动**：每个插件在 `manifest/config/config.yaml` 的 `chain.plugins` 下独立分段，`enabled` 单独开关（省略 = 启用，显式 `false` 才关闭）、`order` 决定责任链顺序、`config` 为插件私有配置（由插件自己的 `Init` 解析）
-- **热更新**：gcfg watch 触发后整体重建责任链并原子替换，在途请求继续用旧链直至结束；旧 generation 在最后一个流结束后 `Close`——插件实例视为不可变，**不要在插件实例上做运行时可变状态**（跨请求状态请放注册表并加锁），`Close` 必须幂等
+- **配置驱动**：每个插件在 `manifest/config/config.yaml` 的 `chain.plugins` 下独立分段，`enabled` 单独开关（省略 = 启用，显式 `false` 才关闭）、`order` 决定 filter chain 顺序、`config` 为插件私有配置（由插件自己的 `Init` 解析）
+- **热更新**：gcfg watch 触发后整体重建 filter chain 并原子替换，在途请求继续用旧链直至结束；旧 generation 在最后一个流结束后 `Close`——插件实例视为不可变，**不要在插件实例上做运行时可变状态**（跨请求状态请放注册表并加锁），`Close` 必须幂等
 
 ## 命令（改动后必须全部通过）
 

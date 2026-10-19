@@ -1,0 +1,91 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extproc-perf
+  namespace: higress-cj
+  labels: {app: extproc-perf}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: extproc-perf}}
+  template:
+    metadata:
+      labels: {app: extproc-perf}
+    spec:
+      containers:
+        - name: ext-proc
+          image: extproc:perf
+          imagePullPolicy: IfNotPresent
+          ports:
+            - {name: grpc, containerPort: 50051}
+            - {name: metrics, containerPort: 19090}
+          readinessProbe:
+            httpGet: {path: /metrics, port: 19090}
+            initialDelaySeconds: 2
+          resources:
+            requests: {cpu: 250m, memory: 128Mi}
+            limits: {cpu: "1", memory: 512Mi}
+          volumeMounts:
+            - {name: config, mountPath: /app/manifest/config, readOnly: true}
+      volumes:
+        - name: config
+          configMap: {name: ext-proc-perf-config}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: extproc-perf
+  namespace: higress-cj
+spec:
+  selector: {app: extproc-perf}
+  ports:
+    - {name: grpc, port: 50051, targetPort: 50051}
+    - {name: metrics, port: 19090, targetPort: 19090}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: perf-upstream
+  namespace: higress-cj
+  labels: {app: perf-upstream}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: perf-upstream}}
+  template:
+    metadata:
+      labels: {app: perf-upstream}
+    spec:
+      containers:
+        - name: upstream
+          image: perf-upstream:1
+          imagePullPolicy: IfNotPresent
+          ports: [{containerPort: 8080}]
+          readinessProbe:
+            httpGet: {path: /, port: 8080}
+            initialDelaySeconds: 1
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: perf-upstream
+  namespace: higress-cj
+spec:
+  selector: {app: perf-upstream}
+  ports: [{port: 80, targetPort: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: perf-upstream
+  namespace: higress-cj
+spec:
+  ingressClassName: higress-cj
+  rules:
+    - host: perf.test
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: perf-upstream
+                port: {number: 80}

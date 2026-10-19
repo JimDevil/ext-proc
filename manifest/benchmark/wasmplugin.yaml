@@ -1,0 +1,10 @@
+apiVersion: extensions.higress.io/v1alpha1
+kind: WasmPlugin
+metadata:
+  name: model-router-perf
+  namespace: higress-cj
+spec:
+  defaultConfig:
+    modelToHeader: x-higress-llm-model
+  failStrategy: FAIL_CLOSE
+  url: oci://higress-registry.cn-hangzhou.cr.aliyuncs.com/plugins/model-router:2.0.3

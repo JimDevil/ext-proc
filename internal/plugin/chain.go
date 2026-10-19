@@ -17,7 +17,7 @@ type pluginEntry struct {
 	failOpen bool
 }
 
-// Chain is the responsibility chain: it holds the Plugin instances that are
+// Chain is the filter chain: it holds the Plugin instances that are
 // enabled and sorted by order, each with its own failure policy. The chain is
 // immutable — hot reload rebuilds and atomically swaps it (see
 // internal/processor) — so the Chain and its plugin instances are read-only at

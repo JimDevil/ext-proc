@@ -369,7 +369,9 @@ func (s *GenericExtProcServer) processPhase(procReq *extprocv3.ProcessingRequest
 		return nil, phase, err
 	}
 
-	s.logPhase(rc, RequestPhaseToString(phase), slog.Duration("duration", dur))
+	phaseName := RequestPhaseToString(phase)
+	s.metrics.PhaseDurationSeconds.WithLabelValues(phaseName).Observe(dur.Seconds())
+	s.logPhase(rc, phaseName, slog.Duration("duration", dur))
 	response, err := rc.GetResponse(phase)
 	return response, phase, err
 }

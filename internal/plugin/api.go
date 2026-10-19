@@ -1,5 +1,5 @@
 // Package plugin defines the plugin contract for this ext_proc server
-// (responsibility-chain pattern).
+// (filter-chain pattern).
 //
 // Every plugin implements the Plugin interface and self-registers in its
 // package init(); at runtime a Chain invokes enabled plugins in the configured

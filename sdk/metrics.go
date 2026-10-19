@@ -15,6 +15,10 @@ type Metrics struct {
 	PanicRecoveries       prometheus.Counter
 	TotalStreams          prometheus.Counter
 	StreamDurationSeconds prometheus.Histogram
+	// PhaseDurationSeconds is the per-phase processor duration (the groundwork
+	// for phase-level tracing): one sample per processed phase message,
+	// labeled by phase name.
+	PhaseDurationSeconds  *prometheus.HistogramVec
 	TotalRequestHeaders   prometheus.Counter
 	TotalRequestBody      prometheus.Counter
 	TotalRequestTrailers  prometheus.Counter
@@ -75,6 +79,16 @@ func NewEmptyMetrics() *Metrics {
 				// scrapes; a native-only histogram exposes just +Inf there.
 				Buckets: []float64{0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60},
 			},
+		),
+		PhaseDurationSeconds: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name: "extproc_phase_duration_seconds",
+				Help: "Per-phase processor duration in seconds. Phase durations are microseconds-scale, so the buckets start at 10µs.",
+				// 10µs .. ~5min exponential; classic buckets kept for scrapers
+				// without native-histogram support.
+				Buckets: prometheus.ExponentialBuckets(0.00001, 1.6, 25),
+			},
+			[]string{"phase"},
 		),
 		TotalRequestHeaders: prometheus.NewCounter(
 			prometheus.CounterOpts{

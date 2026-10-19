@@ -2,11 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-把网关插件从 WASM 迁到进程外 —— 基于 [Envoy](https://www.envoyproxy.io) [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter 的责任链插件框架。
+把网关插件从 WASM 迁到进程外 —— 基于 [Envoy](https://www.envoyproxy.io) [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter 的 filter chain 插件框架。
 
 每个插件就是一个标准 gRPC 服务上的一个 Go 包：独立部署、独立扩缩容、崩溃不波及 Envoy；generation 安全的热更新、插件级失败策略、TLS/mTLS、Prometheus 指标、W3C trace 传播，以及开箱即用的两个 LLM 网关插件。
 
-> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——责任链、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个示例插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
+> **💡 把它当脚手架用。** 这个仓库就是开发 ext_proc filter 的现成起点：克隆后删掉两个示例插件（`internal/plugins/` 下的包、`main.go` 里的导入、`config.yaml` 里的配置段——或者直接 `enabled: false`），然后在 `internal/plugins/<your-plugin>` 下开发自己的业务。数据面服务需要的一切——filter chain、热更新、指标、优雅退出、panic 防护——全部由框架层兜底。两个示例插件同时是可运行、可研究、可移除的参考实现。见[写一个自己的插件](#写一个自己的插件)。
 
 ## 为什么离开 WASM
 
@@ -22,11 +22,11 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 
 ## 架构
 
-![ext-proc 生产架构：Envoy 请求路径、六阶段责任链、generation 生命周期、两种部署形态与可观测性](docs/assets/chain-architecture.svg)
+![ext-proc 生产架构：Envoy 请求路径、六阶段 filter chain、generation 生命周期、两种部署形态与可观测性](docs/assets/chain-architecture.svg)
 
 **① 请求路径。** 请求进入 Envoy，`ext_proc` HTTP filter 为每个请求打开一条双向 gRPC 流；Envoy 依次发送最多六个阶段（request headers/body/trailers、response headers/body/trailers），SDK 返回 header/body mutation，或用 `ImmediateResponse` 短路上游调用。每条流由一个 goroutine 处理，mutation 按阶段累积。
 
-**② ext-proc 内部。** `RequestContext` 持有流状态（请求元数据、跨插件 KV、解析后的 W3C `traceparent`）。`RouteTable` 是不可变 generation：每个启用插件解析首条命中的 `matchRule`（或回退全局配置），`Chain` 再按 `order` 执行插件实例。责任链负责插件级 `failurePolicy`、`fail_open` 时的 mutation/请求态回滚、插件边界 panic 恢复，以及 `plugin`/`phase` 指标。插件实例不可变，`Close` 必须幂等。
+**② ext-proc 内部。** `RequestContext` 持有流状态（请求元数据、跨插件 KV、解析后的 W3C `traceparent`）。`RouteTable` 是不可变 generation：每个启用插件解析首条命中的 `matchRule`（或回退全局配置），`Chain` 再按 `order` 执行插件实例。filter chain 负责插件级 `failurePolicy`、`fail_open` 时的 mutation/请求态回滚、插件边界 panic 恢复，以及 `plugin`/`phase` 指标。插件实例不可变，`Close` 必须幂等。
 
 **③ Generation 与运维。** 配置热更新先完整构建并校验下一代，再原子发布。在途流 pin 住自己的 generation；旧 generation 在最后一个流结束后 `Close`，插件持有的连接/缓存可以安全释放且不影响在线流量。构建失败保留上一代。同一个二进制既支持 loopback sidecar，也支持带 TLS/mTLS + NetworkPolicy 的跨 Pod Deployment；`/metrics`、`/healthz`、`/readyz` 覆盖观测与摘流。
 
@@ -34,9 +34,9 @@ WASM 插件与 Envoy 同进程共生——内存、故障、运维全部耦合�
 
 ## 核心特性
 
-- **责任链编排** —— 按配置 `order` 升序执行，任一插件短路即停止后续插件；插件之间零依赖，只共享请求级状态。
+- **filter chain 编排** —— 按配置 `order` 升序执行，任一插件短路即停止后续插件；插件之间零依赖，只共享请求级状态。
 - **标准化插件接入** —— 六阶段回调 + `BasePlugin` 空实现 + `init()` 自注册：一个包、五步接入、互不影响。
-- **配置热更新** —— GoFrame gcfg watch `config.yaml`，责任链原子重建；在途请求继续走旧链，旧 generation 在最后一个流结束后 `Close`，全程零重启。
+- **配置热更新** —— GoFrame gcfg watch `config.yaml`，filter chain 原子重建；在途请求继续走旧链，旧 generation 在最后一个流结束后 `Close`，全程零重启。
 - **双层容错** —— 链级 `fail_open` / `fail_closed` 与 Envoy `failure_mode_allow` 对齐，且每个插件可单独覆盖（`plugins[].failurePolicy`）：同一条链里鉴权插件 fail-closed、路由辅助插件 fail-open。`fail_open` 会回滚该插件的 mutation 与请求态，并计入插件失败指标。
 - **可观测性** —— Prometheus 指标（流数、阶段错误、带经典 bucket 的耗时直方图，以及按 `plugin`/`phase` 拆分的插件延迟与失败数）+ gRPC/HTTP 健康检查 + 只记录元数据的 slog 结构化日志。原始 header 和 body 永不落日志。指标目录见 [`docs/metrics.md`](docs/metrics.md)。Grafana dashboard：[`manifest/deploy/grafana-dashboard.json`](manifest/deploy/grafana-dashboard.json)。
 - **生产工程** —— 三步曲优雅退出（摘流 → 传播延迟 → 有界排空）；gRPC 流控交给 Envoy 背压；**panic 防护** —— 插件或处理器 panic 只影响当前流，按 failurePolicy 处理并计入 `extproc_panic_recoveries_total`。
@@ -245,10 +245,24 @@ chain:
       config: { yourKey: yourValue }   # 插件私有配置，由插件自己解析
 ```
 
+## 性能：ext_proc vs wasmPlugin
+
+在单节点 k8s（Higress 2.2.4 网关 + 流式 LLM 风格 SSE 上游）上端到端实测：同样的语义工作（提取 `model` → 注入 header）分别以官方 higress `model-router` **wasmPlugin** 和本仓库双插件 **ext_proc** 链运行。16 并发 3 轮交替 + 64 并发饱和探测。完整方法、原始数据与复现工具：[docs/benchmark.md](docs/benchmark.md)（工具在 `manifest/benchmark/`）。
+
+| TTFT（ms） | mean | p50 | p90 | p99 |
+|---|---|---|---|---|
+| 基线（无插件） | 5.24 | 4.62 | 9.86 | 18.30 |
+| wasmPlugin（进程内） | 4.93 | 4.06 | 9.25 | 16.28 |
+| ext_proc（双插件链） | 5.78 | 4.80 | 9.74 | 19.37 |
+
+- **TTFT**：两种方式 p50 与无插件基线的差距都在 ~1ms 内——相对真实 LLM 的 TTFT（数百 ms 起），插件运行时不是 TTFT 的影响因素。
+- **吞吐上限**：64 并发下 wasmPlugin 与基线持平（rps −0.7%，TTFT p50 +1.6ms）；ext_proc 链为每阶段的 gRPC 往返付出约 3% rps（TTFT p50 +8ms）。
+- **ext_proc 的时间花在哪**：插件逻辑本身是 µs 级（`extproc_phase_duration_seconds`：每相位 7–21µs）；测到的开销来自跨进程跳转机制而非逻辑——这个跳转换来的是进程隔离、原生 Go 工具链与独立部署。
+
 ## 注意事项
 
 - **失败策略**：`fail_closed` 返回 gRPC 错误，最终是否放行仍由 Envoy 的 `failure_mode_allow` 决定。必须无条件拒绝的请求（例如鉴权）应使用 `CancelRequest` 发本地响应，`apikey-extract` 的 required 模式就是这么做的。
-- **热更新**：只有 `chain` 段可热更新。新配置会先完整构建并校验，成功后才原子发布；构建失败保留旧链和旧配置。`app` / `logger` / `server` 变更需要重启进程。旧 generation 在最后一个在途流结束后关闭，因此插件可以持有连接/缓存，只要 `Close` 幂等释放。
+- **热更新**：只有 `chain` 段可热更新。新配置会先完整构建并校验，成功后才原子发布；构建失败保留旧链和旧配置。`app` / `logger` / `server` 变更需要重启进程。旧 generation 在最后一个在途流结束后关闭，因此插件可以持有连接/缓存，只要 `Close` 幂等释放。注意：GoFrame gcfg 监听的是文件 inode，**k8s ConfigMap 以符号链接重命名方式更新时可能不触发 watch**——改完 ConfigMap 请重启 Pod，或用共享卷就地编辑文件。
 - **Envoy 受保护头**：`:method`、`:authority`、`host`、`x-envoy-*` 不可改写；SDK 会在写入前直接返回明确错误。
 - **Content-Length**：插件改写 body 时由 Envoy 重新计算，SDK 不再写入；插件不应自己设置 `content-length`。
 - **大 body**：`server.maxRecvMsgSize` / `maxSendMsgSize` 必须不小于 Envoy buffer 的 body 上限。`BUFFERED` 下一条消息就是完整 body；`STREAMED` 下样例插件会识别分块并跳过，避免改写不完整的 JSON。

@@ -605,6 +605,55 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "Processor phase p99 latency",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${DS_PROMETHEUS}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 29
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${DS_PROMETHEUS}"
+          },
+          "expr": "histogram_quantile(0.99, sum by (le, phase) (rate(extproc_phase_duration_seconds_bucket{job=~\"$job\"}[5m])))",
+          "legendFormat": "{{phase}}",
+          "refId": "A"
+        }
+      ]
     }
   ],
   "refresh": "30s",

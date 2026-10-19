@@ -11,6 +11,7 @@
 | `extproc_phase_errors_total` | counter | — | Phase-level processing errors (may repeat within a stream) |
 | `extproc_panic_recoveries_total` | counter | — | Recovered processor/plugin panics |
 | `extproc_stream_duration_seconds` | histogram | — | Stream duration (native + classic buckets) |
+| `extproc_phase_duration_seconds` | histogram | `phase` | Per-phase processor duration (µs-scale; 10µs..5min buckets) |
 | `extproc_plugin_duration_seconds` | histogram | `plugin`, `phase` | Plugin execution latency |
 | `extproc_plugin_failures_total` | counter | `plugin`, `phase`, `policy` | Plugin errors/panics; `policy` is `fail_open` or `fail_closed` |
 | `extproc_request_headers_total` | counter | — | Request-headers phases |

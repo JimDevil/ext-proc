@@ -2,7 +2,7 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-Move gateway plugins out of WASM — a responsibility-chain plugin framework built on [Envoy](https://www.envoyproxy.io)'s [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter.
+Move gateway plugins out of WASM — a filter-chain plugin framework built on [Envoy](https://www.envoyproxy.io)'s [ext_proc](https://www.envoyproxy.io/docs/envoy/latest/configuration/http/http_filters/ext_proc_filter) filter.
 
 Every plugin is just a Go package behind a standard gRPC service: deploy and scale independently, crashes never take down Envoy. Generation-safe hot reload, per-plugin failure policy, TLS/mTLS, Prometheus metrics, W3C trace propagation, and two LLM-gateway plugins out of the box.
 
@@ -249,10 +249,24 @@ chain:
       config: { yourKey: yourValue }   # plugin-private config, parsed by the plugin itself
 ```
 
+## Performance: ext_proc vs wasmPlugin
+
+Measured end to end on a single-node k8s with a Higress 2.2.4 gateway and a streaming LLM-style SSE upstream: the same semantic work (extract `model` → inject header) run once as the official higress `model-router` **wasmPlugin** and once as this repo's 2-plugin **ext_proc** chain. 3 interleaved rounds at 16 concurrency, plus a 64-concurrency saturation probe. Full methodology, raw data and harness: [docs/benchmark.md](docs/benchmark.md) (`manifest/benchmark/`).
+
+| TTFT (ms) | mean | p50 | p90 | p99 |
+|---|---|---|---|---|
+| baseline (no plugin) | 5.24 | 4.62 | 9.86 | 18.30 |
+| wasmPlugin (in-process) | 4.93 | 4.06 | 9.25 | 16.28 |
+| ext_proc (2-plugin chain) | 5.78 | 4.80 | 9.74 | 19.37 |
+
+- **TTFT**: both runtimes stay within ~1ms of the no-plugin baseline at p50 — at real LLM TTFT scales (hundreds of ms and up) the plugin runtime is not a TTFT factor.
+- **Throughput ceiling**: at 64-way concurrency the wasmPlugin holds baseline (−0.7% rps, TTFT p50 +1.6ms); the ext_proc chain gives back ~3% rps (TTFT p50 +8ms) for its per-phase gRPC round trips.
+- **Where ext_proc time goes**: the plugin work itself is µs-scale (`extproc_phase_duration_seconds`: 7–21µs per phase); the measured cost is the hop mechanics, not the logic — and that hop buys process isolation, native Go tooling and independent deployment.
+
 ## Notes
 
 - **Failure policy**: `fail_closed` returns a gRPC error; Envoy still makes the final call via `failure_mode_allow`. If a request must be rejected regardless of Envoy's policy (for example authentication), use `CancelRequest` to send an immediate local reply, as `apikey-extract` does in required mode.
-- **Hot reload**: only the `chain` section is hot-reloadable. A new generation is fully built and validated before it is published; a failed rebuild keeps the previous chain and config. Changes to `app`, `logger` or `server` require a restart. The retired generation is closed after its last in-flight stream, so plugins may own connections/caches as long as `Close` releases them idempotently.
+- **Hot reload**: only the `chain` section is hot-reloadable. A new generation is fully built and validated before it is published; a failed rebuild keeps the previous chain and config. Changes to `app`, `logger` or `server` require a restart. The retired generation is closed after its last in-flight stream, so plugins may own connections/caches as long as `Close` releases them idempotently. Caveat: gcfg watches the file inode; Kubernetes ConfigMap updates via symlink rename may not fire a watch event, so restart the pod after a ConfigMap change or edit the mounted file in place.
 - **Envoy-protected headers**: `:method`, `:authority`, `host` and `x-envoy-*` cannot be rewritten; the SDK rejects those mutations early with a clear error.
 - **Content-Length**: the SDK leaves it to Envoy when a plugin mutates the body. `ReplaceBody` replaces the body bytes only; plugins should not write `content-length` themselves.
 - **Large bodies**: `server.maxRecvMsgSize` / `maxSendMsgSize` must be at least as large as the bodies Envoy buffers. Under `BUFFERED` a single message carries the whole body; under `STREAMED` the sample plugins detect partial chunks and skip them instead of rewriting an incomplete document.

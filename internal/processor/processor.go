@@ -1,5 +1,5 @@
 // Package processor bridges the SDK's six phase callbacks to the plugin
-// responsibility chain. Its only job is translation between the two semantics
+// filter chain. Its only job is translation between the two semantics
 // (RequestContext <-> plugin.Context); all business logic lives in
 // internal/plugins.
 package processor
