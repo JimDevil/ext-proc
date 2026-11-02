@@ -4,7 +4,7 @@ go 1.26
 
 require (
 	github.com/envoyproxy/go-control-plane/envoy v1.37.0
-	github.com/gogf/gf/v2 v2.10.3
+	github.com/gogf/gf/v2 v2.10.4
 	github.com/prometheus/client_golang v1.24.1
 	github.com/tidwall/gjson v1.20.0
 	github.com/tidwall/sjson v1.2.5
