@@ -7,7 +7,7 @@ require (
 	github.com/gogf/gf/v2 v2.10.3
 	github.com/prometheus/client_golang v1.24.1
 	github.com/tidwall/gjson v1.20.0
-	github.com/tidwall/sjson v1.2.5
+	github.com/tidwall/sjson v1.2.7
 	google.golang.org/grpc v1.83.0
 	gopkg.in/yaml.v3 v3.0.1
 )
